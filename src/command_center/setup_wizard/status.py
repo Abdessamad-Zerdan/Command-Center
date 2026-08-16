@@ -22,18 +22,19 @@ from command_center import config, profile_example
 
 
 def is_setup_complete() -> bool:
-    # Ollama needs no key — TRIAGE_PROVIDER=="ollama" (the documented
-    # default in .env.example) is itself the "chose this provider"
-    # signal, same as a non-empty key is for Groq/Anthropic. Without this
-    # branch, an instance following SETUP.md's own Ollama instructions
-    # (the free/local option, listed there alongside Groq and Anthropic)
-    # would never satisfy this check and get permanently redirected to
-    # /setup, which then 403s it for lacking an invite — a real lockout,
-    # not just Google's (see the docstring above).
+    # Ollama needs no key — TRIAGE_PROVIDER in ("ollama", "auto") (the
+    # documented default in .env.example) is itself the "chose this
+    # provider" signal, same as a non-empty key is for Groq/Anthropic.
+    # Without this branch, an instance following SETUP.md's own
+    # Ollama/auto instructions (the free/local option, listed there
+    # alongside Groq and Anthropic) would never satisfy this check and
+    # get permanently redirected to /setup, which then 403s it for
+    # lacking an invite — a real lockout, not just Google's (see the
+    # docstring above).
     triage_ready = (
         bool(config.GROQ_API_KEY)
         or bool(config.ANTHROPIC_API_KEY)
-        or config.TRIAGE_PROVIDER == "ollama"
+        or config.TRIAGE_PROVIDER in ("ollama", "auto")
     )
 
     # config.PROFILE falls back to profile_example.PROFILE when

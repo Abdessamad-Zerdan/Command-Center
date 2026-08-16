@@ -43,12 +43,22 @@ Then fill in:
 
 - `APP_TIMEZONE` — an IANA timezone name (e.g. `Europe/Istanbul`,
   `America/New_York`). Defaults to `UTC` if you skip it.
-- `TRIAGE_PROVIDER` + `TRIAGE_MODEL` — pick **one**:
-  - `ollama` — free, local, the default. Install Ollama,
-    `ollama pull llama3.2:3b` (or whatever model you set
-    `TRIAGE_MODEL` to). No key needed.
-  - `groq` — free tier, fast, hosted. Get a key at
-    [console.groq.com](https://console.groq.com), set `GROQ_API_KEY`.
+- `TRIAGE_PROVIDER` — pick one:
+  - `auto` — **the default.** Checks whether `llama3.2:3b` is pulled
+    in a local Ollama install and uses it if so (free, private, no
+    Groq tokens spent); automatically falls back to Groq the instant
+    it isn't pulled, Ollama isn't running, or a request to it fails —
+    no restart needed. Set `GROQ_API_KEY` below so the fallback
+    actually has somewhere to go once it's needed.
+    `ollama pull llama3.2:3b` to make the local leg usable, or set
+    `OLLAMA_MODEL` in `.env` to check for a different tag you've
+    already pulled instead.
+  - `ollama` — same as auto's local leg, but with no Groq fallback at
+    all. Install Ollama, `ollama pull llama3.2:3b` (or whatever you set
+    `TRIAGE_MODEL` to for this mode specifically). No key needed.
+  - `groq` — Groq only, no local fallback. Free tier, fast, hosted. Get
+    a key at [console.groq.com](https://console.groq.com), set
+    `GROQ_API_KEY`.
   - `anthropic` — set `ANTHROPIC_API_KEY` from
     [console.anthropic.com](https://console.anthropic.com).
 - `MEDIUM_API_KEY` + `MEDIUM_USERNAME` — optional. Powers the "Reading"

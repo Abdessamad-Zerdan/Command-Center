@@ -46,6 +46,19 @@ def test_ollama_provider_alone_satisfies_the_provider_check(
     assert status.is_setup_complete() is True
 
 
+def test_auto_provider_alone_satisfies_the_provider_check(
+    satisfied: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same lockout, same reasoning, for TRIAGE_PROVIDER=auto — the new
+    .env.example default. auto's whole point is working without a Groq
+    key configured yet (it only needs one once Ollama is unavailable),
+    so it must satisfy this check exactly like plain "ollama" does."""
+    monkeypatch.setattr(config, "GROQ_API_KEY", None)
+    monkeypatch.setattr(config, "ANTHROPIC_API_KEY", None)
+    monkeypatch.setattr(config, "TRIAGE_PROVIDER", "auto")
+    assert status.is_setup_complete() is True
+
+
 def test_anthropic_alone_satisfies_the_provider_check(
     satisfied: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

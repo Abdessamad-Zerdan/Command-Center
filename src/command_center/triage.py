@@ -1,9 +1,11 @@
 """Triage: raw ingested items -> categorized, prioritized brief items.
 
-Two interchangeable providers behind one entry point, `run()` — the rest
-of the app only ever calls that, never the provider internals. Both are
+Interchangeable providers behind one entry point, `run()` — the rest of
+the app only ever calls that, never the provider internals. All are
 structured-output only, never free-text parsing — Anthropic via forced
-tool-use, Ollama via JSON-mode (see _run_ollama for why the two differ).
+tool-use, Ollama/Groq via JSON-mode (see _run_ollama for why they differ
+from Anthropic). TRIAGE_PROVIDER=auto is a fourth, composite mode: try
+local Ollama first, fall back to Groq on any failure — see _run_auto.
 """
 
 import json
@@ -12,6 +14,7 @@ import re
 from datetime import datetime, timedelta
 
 import anthropic
+import httpx
 import openai
 
 from command_center.config import (
@@ -20,6 +23,7 @@ from command_center.config import (
     GROQ_API_KEY,
     GROQ_API_KEY_BACKUP,
     GROQ_API_KEY_BACKUP_2,
+    OLLAMA_MODEL,
     TRIAGE_LANES,
     TRIAGE_MODEL,
     TRIAGE_PROVIDER,
@@ -34,6 +38,9 @@ class TriageProviderError(Exception):
     """Raised when a provider can't be reached or misbehaves, with an
     actionable message instead of a raw SDK stack trace.
     """
+
+
+_OLLAMA_BASE_URL = "http://localhost:11434"
 
 
 SYSTEM_PROMPT = (
@@ -116,7 +123,52 @@ def run(raw_items: list[RawItem]) -> list[dict]:
         return _run_ollama(raw_items)
     if TRIAGE_PROVIDER == "groq":
         return _run_groq(raw_items)
+    if TRIAGE_PROVIDER == "auto":
+        return _run_auto(raw_items)
     raise ValueError(f"Unknown TRIAGE_PROVIDER: {TRIAGE_PROVIDER!r}")
+
+
+_AUTO_OLLAMA_MODEL = "llama3.2:3b"
+
+
+def _ollama_has_model(model: str) -> bool:
+    """Checks whether `model` is actually pulled locally — the sole
+    signal auto mode uses to decide Ollama vs Groq, no guessing at
+    what else might be installed. Returns False (fall back to Groq
+    without even attempting Ollama) if the daemon isn't reachable
+    either.
+    """
+    try:
+        response = httpx.get(f"{_OLLAMA_BASE_URL}/api/tags", timeout=2.0)
+        response.raise_for_status()
+        models = response.json().get("models", [])
+    except (httpx.HTTPError, ValueError):
+        return False
+    return any(m.get("name") == model for m in models)
+
+
+def _run_auto(raw_items: list[RawItem]) -> list[dict]:
+    """Prefers local Ollama — free, private, no token usage — and falls
+    back to Groq automatically whenever the target model (llama3.2:3b,
+    or OLLAMA_MODEL if set to pin a different one) isn't pulled, Ollama
+    isn't running, or a request to it fails for any other reason
+    mid-request. Re-checked on every call rather than cached at
+    startup, so it self-corrects if Ollama gets started/stopped later.
+
+    Groq must still be configured (GROQ_API_KEY in .env) for the
+    fallback to actually work — this mode doesn't remove that
+    requirement, it just means you don't need Groq to be *reachable* on
+    every single call when Ollama is up and doing the work for free.
+    """
+    model = OLLAMA_MODEL or _AUTO_OLLAMA_MODEL
+    if not _ollama_has_model(model):
+        logger.info("Ollama model %r not available locally — using Groq.", model)
+        return _run_groq(raw_items)
+    try:
+        return _run_ollama(raw_items, model=model)
+    except TriageProviderError as exc:
+        logger.warning("Ollama unavailable or failed (%s) — falling back to Groq", exc)
+        return _run_groq(raw_items)
 
 
 def _build_payload(raw_items: list[RawItem]) -> list[dict]:
@@ -239,12 +291,18 @@ _OLLAMA_BATCH_SIZE = 5
 _GROQ_BATCH_SIZE = 5
 
 
-def _run_ollama(raw_items: list[RawItem]) -> list[dict]:
-    client = openai.OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
+def _run_ollama(raw_items: list[RawItem], model: str | None = None) -> list[dict]:
+    # `model` is resolved here (not a `model: str = TRIAGE_MODEL` default
+    # argument) so a test/caller monkeypatching triage.TRIAGE_MODEL still
+    # takes effect — default-argument expressions bind once at import
+    # time, before any monkeypatch can run.
+    if model is None:
+        model = TRIAGE_MODEL
+    client = openai.OpenAI(base_url=f"{_OLLAMA_BASE_URL}/v1", api_key="ollama")
     chat_fn = lambda messages, **kw: _call_chat_completion(  # noqa: E731
-        client, TRIAGE_MODEL, messages, provider_label="Ollama", **kw
+        client, model, messages, provider_label="Ollama", **kw
     )
-    return _run_batched(chat_fn, raw_items, TRIAGE_MODEL, "Ollama", _OLLAMA_BATCH_SIZE)
+    return _run_batched(chat_fn, raw_items, model, "Ollama", _OLLAMA_BATCH_SIZE)
 
 
 def _run_groq(raw_items: list[RawItem]) -> list[dict]:
