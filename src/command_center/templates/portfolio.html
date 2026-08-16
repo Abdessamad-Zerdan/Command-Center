@@ -1,0 +1,349 @@
+{% extends "base.html" %}
+{% block title %}{{ profile.name }}{% endblock %}
+{% block extra_head %}
+<style>
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .animate-in { animation: fadeUp 0.8s ease-out both; }
+</style>
+<script>
+  function pomodoroTimer(initialHistory, initialTimeByTask) {
+    return {
+      taskName: '',
+      taskNameDraft: '',
+      promptingName: false,
+      plannedMinutes: 25,
+      remainingSeconds: 25 * 60,
+      running: false,
+      paused: false,
+      intervalId: null,
+      history: initialHistory,
+      timeByTask: initialTimeByTask,
+
+      get display() {
+        const m = Math.floor(this.remainingSeconds / 60).toString().padStart(2, '0');
+        const s = (this.remainingSeconds % 60).toString().padStart(2, '0');
+        return `${m}:${s}`;
+      },
+
+      restore() {
+        const raw = localStorage.getItem('pomodoro');
+        if (!raw) return;
+        let saved;
+        try { saved = JSON.parse(raw); } catch (e) { return; }
+        this.taskName = saved.taskName || '';
+        this.plannedMinutes = saved.plannedMinutes || 25;
+
+        if (saved.running) {
+          const elapsedSince = Math.floor((Date.now() - saved.savedAtMs) / 1000);
+          const remaining = saved.remainingSeconds - elapsedSince;
+          if (remaining <= 0) {
+            localStorage.removeItem('pomodoro');
+            this.logSession('completed', this.plannedMinutes * 60);
+            this.remainingSeconds = this.plannedMinutes * 60;
+          } else {
+            this.remainingSeconds = remaining;
+            this.running = true;
+            this.tick();
+          }
+        } else {
+          this.remainingSeconds = saved.remainingSeconds;
+          this.paused = true;
+        }
+      },
+
+      persist() {
+        localStorage.setItem('pomodoro', JSON.stringify({
+          taskName: this.taskName,
+          plannedMinutes: this.plannedMinutes,
+          remainingSeconds: this.remainingSeconds,
+          running: this.running,
+          savedAtMs: Date.now(),
+        }));
+      },
+
+      clickMain() {
+        if (this.running) { this.pause(); return; }
+        if (this.taskName.trim()) { this.start(); return; }
+        this.taskNameDraft = '';
+        this.promptingName = true;
+        this.$nextTick(() => this.$refs.taskInput && this.$refs.taskInput.focus());
+      },
+
+      confirmName() {
+        if (!this.taskNameDraft.trim()) return;
+        this.taskName = this.taskNameDraft.trim();
+        this.taskNameDraft = '';
+        this.promptingName = false;
+        this.start();
+      },
+
+      cancelPrompt() {
+        this.promptingName = false;
+        this.taskNameDraft = '';
+      },
+
+      start() {
+        if (!this.paused) {
+          this.remainingSeconds = this.plannedMinutes * 60;
+        }
+        this.running = true;
+        this.paused = false;
+        this.persist();
+        this.tick();
+      },
+
+      tick() {
+        clearInterval(this.intervalId);
+        this.intervalId = setInterval(() => {
+          this.remainingSeconds--;
+          if (this.remainingSeconds <= 0) {
+            clearInterval(this.intervalId);
+            this.running = false;
+            this.paused = false;
+            localStorage.removeItem('pomodoro');
+            this.logSession('completed', this.plannedMinutes * 60);
+            this.remainingSeconds = this.plannedMinutes * 60;
+          } else {
+            this.persist();
+          }
+        }, 1000);
+      },
+
+      pause() {
+        clearInterval(this.intervalId);
+        this.running = false;
+        this.paused = true;
+        this.persist();
+      },
+
+      reset() {
+        clearInterval(this.intervalId);
+        const elapsed = this.plannedMinutes * 60 - this.remainingSeconds;
+        if (elapsed > 0) {
+          this.logSession('stopped_early', elapsed);
+        }
+        this.running = false;
+        this.paused = false;
+        this.taskName = '';
+        this.remainingSeconds = this.plannedMinutes * 60;
+        localStorage.removeItem('pomodoro');
+      },
+
+      logSession(status, elapsedSeconds) {
+        const taskName = this.taskName;
+        const plannedMinutes = this.plannedMinutes;
+        fetch('/pomodoro/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task_name: taskName,
+            planned_minutes: plannedMinutes,
+            elapsed_seconds: elapsedSeconds,
+            status: status,
+          }),
+        })
+          .then(r => r.json())
+          .then(data => {
+            this.history.unshift({
+              id: data.id,
+              task_name: taskName,
+              planned_minutes: plannedMinutes,
+              elapsed_seconds: elapsedSeconds,
+              status: status,
+            });
+            const existing = this.timeByTask.find(t => t.task_name === taskName);
+            if (existing) {
+              existing.total_seconds += elapsedSeconds;
+            } else {
+              this.timeByTask.push({ task_name: taskName, total_seconds: elapsedSeconds });
+            }
+            this.timeByTask.sort((a, b) => b.total_seconds - a.total_seconds);
+          });
+      },
+
+      deleteSession(id) {
+        fetch(`/pomodoro/sessions/${id}`, { method: 'DELETE' })
+          .then(r => r.json())
+          .then(deleted => {
+            this.history = this.history.filter(s => s.id !== id);
+            const t = this.timeByTask.find(t => t.task_name === deleted.task_name);
+            if (t) {
+              t.total_seconds -= deleted.elapsed_seconds;
+              if (t.total_seconds <= 0) {
+                this.timeByTask = this.timeByTask.filter(x => x.task_name !== deleted.task_name);
+              }
+            }
+          });
+      },
+
+      renameTask(oldName, newName) {
+        newName = newName.trim();
+        if (!newName || newName === oldName) return;
+        fetch('/pomodoro/tasks', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ old_name: oldName, new_name: newName }),
+        }).then(r => r.json()).then(() => {
+          const t = this.timeByTask.find(t => t.task_name === oldName);
+          if (t) t.task_name = newName;
+          this.history.forEach(s => { if (s.task_name === oldName) s.task_name = newName; });
+          if (this.taskName === oldName) this.taskName = newName;
+        });
+      },
+
+      formatDuration(totalSeconds) {
+        const mins = Math.round(totalSeconds / 60);
+        if (mins < 60) return `${mins}m`;
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return m ? `${h}h ${m}m` : `${h}h`;
+      },
+    };
+  }
+</script>
+{% endblock %}
+{% block content %}
+
+<a href="/brief" class="fixed top-4 left-4 sm:top-6 sm:left-6 z-20 text-sm text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 bg-[#faf6f1]/90 dark:bg-stone-900/90 backdrop-blur-sm px-2 py-1 rounded">
+  &#8592; Today's Brief
+</a>
+
+<div class="bg-[#faf6f1] dark:bg-stone-900 min-h-screen">
+
+  <section class="min-h-screen flex flex-col items-center justify-center px-6 py-16 text-center">
+    <div class="animate-in text-xs uppercase tracking-widest text-stone-400 dark:text-stone-500">
+      {{ profile.name }}
+    </div>
+
+    <div
+      class="animate-in mt-8 w-full max-w-sm"
+      style="animation-delay: .1s;"
+      x-data='pomodoroTimer({{ pomodoro_history | tojson }}, {{ time_by_task | tojson }})'
+      x-init="restore()"
+    >
+      <div class="h-5 text-sm text-stone-500 dark:text-stone-400" x-show="taskName" x-text="taskName"></div>
+
+      <div class="mt-1 font-['Fraunces'] text-7xl sm:text-9xl tabular-nums text-stone-900 dark:text-stone-100" x-text="display"></div>
+
+      <div class="mt-2 flex items-center justify-center gap-1.5" x-show="!running && !paused && !promptingName">
+        <template x-for="m in [25, 15, 5]" :key="m">
+          <button
+            type="button"
+            @click="plannedMinutes = m; remainingSeconds = m * 60"
+            :class="plannedMinutes === m ? 'text-rust dark:text-rust-light' : 'text-stone-400 dark:text-stone-500'"
+            class="text-xs px-2 py-0.5 hover:text-stone-900 dark:hover:text-stone-100"
+            x-text="m + 'm'"
+          ></button>
+        </template>
+      </div>
+
+      <div class="mt-6" x-show="!promptingName">
+        <div class="flex items-center justify-center gap-2">
+          <button
+            type="button"
+            @click="clickMain()"
+            class="text-xs px-4 py-2 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap"
+          >
+            <span x-text="running ? 'Pause' : (paused ? 'Resume' : 'Start')"></span>
+          </button>
+          <button
+            type="button"
+            @click="reset()"
+            x-show="running || paused"
+            class="text-xs px-4 py-2 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100"
+          >Reset</button>
+        </div>
+      </div>
+
+      <div class="mt-6" x-show="promptingName" x-transition.opacity>
+        <input
+          type="text"
+          x-model="taskNameDraft"
+          x-ref="taskInput"
+          @keydown.enter="confirmName()"
+          @keydown.escape="cancelPrompt()"
+          placeholder="What are you working on?"
+          class="w-full text-center text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+        >
+        <div class="mt-2 flex items-center justify-center gap-2">
+          <button
+            type="button"
+            @click="confirmName()"
+            class="text-xs px-4 py-2 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium"
+          >Start</button>
+          <button
+            type="button"
+            @click="cancelPrompt()"
+            class="text-xs px-4 py-2 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100"
+          >Cancel</button>
+        </div>
+      </div>
+
+      <template x-if="history.length">
+        <div class="mt-10 text-left">
+          <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-1.5">Time by task</div>
+          <div class="space-y-1 mb-4">
+            <template x-for="t in timeByTask.slice(0, 5)" :key="t.task_name">
+              <div class="flex justify-between items-center text-xs text-stone-600 dark:text-stone-300" x-data="{ editing: false, draft: t.task_name }">
+                <template x-if="!editing">
+                  <span class="flex items-center gap-1.5 min-w-0">
+                    <span x-text="t.task_name" class="truncate"></span>
+                    <button
+                      type="button"
+                      @click="editing = true; draft = t.task_name"
+                      class="shrink-0 text-stone-300 dark:text-stone-600 hover:text-rust dark:hover:text-rust-light"
+                      aria-label="Rename task"
+                    >&#9998;</button>
+                  </span>
+                </template>
+                <template x-if="editing">
+                  <input
+                    type="text"
+                    x-model="draft"
+                    x-init="$watch('editing', value => { if (value) $nextTick(() => $el.focus()) })"
+                    @keydown.enter="renameTask(t.task_name, draft); editing = false"
+                    @keydown.escape="editing = false"
+                    @blur="editing = false"
+                    class="min-w-0 flex-1 text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1 py-0.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+                  >
+                </template>
+                <span x-text="formatDuration(t.total_seconds)" class="shrink-0 ml-2 text-stone-400 dark:text-stone-500"></span>
+              </div>
+            </template>
+          </div>
+
+          <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-1.5">History</div>
+          <div class="space-y-1 max-h-40 overflow-y-auto">
+            <template x-for="s in history.slice(0, 10)" :key="s.id">
+              <div class="flex justify-between items-center text-xs text-stone-600 dark:text-stone-300 py-0.5">
+                <span x-text="s.task_name" class="truncate"></span>
+                <span class="flex items-center gap-1.5 shrink-0 ml-2">
+                  <span
+                    :class="s.status === 'stopped_early' ? 'text-stone-400 dark:text-stone-500 italic' : 'text-stone-400 dark:text-stone-500'"
+                    x-text="formatDuration(s.elapsed_seconds)"
+                  ></span>
+                  <button
+                    type="button"
+                    @click="deleteSession(s.id)"
+                    class="text-stone-300 dark:text-stone-600 hover:text-rust dark:hover:text-rust-light"
+                    aria-label="Delete session"
+                  >&times;</button>
+                </span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <a href="/brief" class="animate-in mt-10 block w-full max-w-sm rounded-lg border border-stone-200 dark:border-stone-700 hover:border-rust dark:hover:border-rust-light transition-colors p-4 text-left" style="animation-delay: .15s;">
+      <div class="text-xs uppercase tracking-wide text-stone-500 dark:text-stone-400">Today's brief &middot; {{ brief_date_short }}</div>
+      <div class="mt-1 text-sm text-stone-700 dark:text-stone-300">{{ tasks_count }} tasks &middot; {{ due_today_count }} due today</div>
+    </a>
+  </section>
+
+</div>
+{% endblock %}

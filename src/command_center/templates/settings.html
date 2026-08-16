@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Settings{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Settings</h1>
+    <a href="/brief" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to brief</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div class="max-w-2xl space-y-3">
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Assistant index</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Last indexed: {{ assistant_last_indexed_at[:16] if assistant_last_indexed_at else "never" }}
+          &middot; {{ assistant_chunk_count }} chunk{{ "" if assistant_chunk_count == 1 else "s" }}
+        </div>
+      </div>
+      <form method="post" action="/settings/assistant/rebuild-index">
+        <button class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Rebuild index
+        </button>
+      </form>
+    </div>
+
+    <div x-data="{ enabled: localStorage.getItem('tooltipsEnabled') !== 'off' }" class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Show icon labels on hover</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">Small tooltip labels when hovering the header icons.</div>
+      </div>
+      <label class="flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-300">
+        <input type="checkbox" x-model="enabled"
+          @change="
+            localStorage.setItem('tooltipsEnabled', enabled ? 'on' : 'off');
+            document.documentElement.classList.toggle('tooltips-disabled', !enabled);
+          "
+          class="accent-rust">
+        Enabled
+      </label>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Projects</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Registered local codebases, linked tasks, and file indexing.
+        </div>
+      </div>
+      <a href="/projects" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Recurring schedule</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Work hours, gym, standing syncs &mdash; used to compute free time on <a href="/schedule" class="underline hover:text-stone-900 dark:hover:text-stone-100">/schedule</a>.
+        </div>
+      </div>
+      <a href="/settings/schedule" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Invites</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Admin-only &mdash; generate a link to gate first-run setup for someone you're sharing this instance with.
+        </div>
+      </div>
+      <a href="/settings/invites" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
+    {% for src in sources %}
+    <div
+      x-data="{
+        enabled: {{ 'true' if src.enabled else 'false' }},
+        interval: {{ src.interval_minutes }},
+        savedInterval: {{ src.interval_minutes }},
+        error: '',
+        toggleEnabled() {
+          this.error = '';
+          const value = this.enabled;
+          fetch('/settings/sources/{{ src.source_name }}', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: value }),
+          }).then(r => { if (!r.ok) { this.enabled = !value; this.error = 'Could not save — try again.'; } });
+        },
+        changeInterval() {
+          this.error = '';
+          const value = this.interval;
+          fetch('/settings/sources/{{ src.source_name }}', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ interval_minutes: value }),
+          }).then(r => {
+            if (r.ok) { this.savedInterval = value; }
+            else { this.interval = this.savedInterval; this.error = 'Could not save — try again.'; }
+          });
+        },
+      }"
+      class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between"
+    >
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100 capitalize">{{ src.source_name }}</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Last pulled: {{ src.last_pulled_at[:16] if src.last_pulled_at else "never" }}
+        </div>
+        <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-1"></p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3">
+        <label class="flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-300">
+          <input
+            type="checkbox"
+            x-model="enabled"
+            @change="toggleEnabled()"
+            class="accent-rust"
+          >
+          Enabled
+        </label>
+
+        <select
+          x-model.number="interval"
+          @change="changeInterval()"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+        >
+          <option value="15">Every 15 min</option>
+          <option value="30">Every 30 min</option>
+          <option value="60">Every hour</option>
+          <option value="120">Every 2 hours</option>
+          <option value="240">Every 4 hours</option>
+          <option value="1440">Once a day</option>
+        </select>
+
+        <form method="post" action="/settings/sources/{{ src.source_name }}/pull">
+          <button class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+            Pull now
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</main>
+{% endblock %}

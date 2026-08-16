@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "command-center",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "command_center.app:app", "--port", "8000"],
+      "port": 8000
+    }
+  ]
+}

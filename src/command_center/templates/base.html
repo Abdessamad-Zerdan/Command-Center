@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Daily Command Center{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = { darkMode: 'class', theme: { extend: { colors: {
+    rust: '#b5563a', 'rust-light': '#d97757'
+  } } } };
+</script>
+<script>
+  (function () {
+    var stored = localStorage.getItem('theme');
+    var dark = stored ? stored === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.classList.toggle('dark', dark);
+  })();
+</script>
+<script>
+  (function () {
+    var enabled = localStorage.getItem('tooltipsEnabled') !== 'off';
+    document.documentElement.classList.toggle('tooltips-disabled', !enabled);
+  })();
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<style>
+  ::-webkit-scrollbar { height: 8px; width: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #d6d3d1; border-radius: 9999px; }
+  .dark ::-webkit-scrollbar-thumb { background: #44403c; }
+  html.tooltips-disabled .icon-tooltip { display: none !important; }
+
+  /* Nav rail: click/tap to open on every device, stays open until the
+     trigger is clicked again or the user clicks outside — no hover
+     involved. Hover-to-open was tried first and repeatedly proved
+     fragile in practice (the rail could disappear before the pointer
+     actually reached it, gap-crossing timing tricks notwithstanding);
+     an explicit, sticky-until-dismissed click is simpler and doesn't
+     have a "did I lose hover for one frame" failure mode at all. */
+  .nav-rail {
+    opacity: 0;
+    transform: translateX(0.75rem);
+    pointer-events: none;
+    transition: opacity 200ms ease, transform 200ms ease;
+  }
+  .nav-rail.nav-rail-open {
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+</style>
+{% block extra_head %}{% endblock %}
+</head>
+<body class="bg-[#faf6f1] dark:bg-stone-900 text-stone-900 dark:text-stone-100 min-h-screen antialiased">
+
+{% set nav_path = request.url.path %}
+{% set nav_items = [
+  {"href": "/brief", "label": "Brief", "icon": "brief",
+   "active": nav_path == "/brief"},
+  {"href": "/projects", "label": "Projects", "icon": "projects",
+   "active": nav_path == "/projects" or nav_path.startswith("/projects/")},
+  {"href": "/schedule", "label": "Schedule", "icon": "schedule",
+   "active": nav_path == "/schedule"},
+  {"href": "/history", "label": "History", "icon": "history",
+   "active": nav_path == "/history" or (nav_path.startswith("/history/") and nav_path != "/history/report")},
+  {"href": "/history/report", "label": "Report", "icon": "report",
+   "active": nav_path == "/history/report"},
+  {"href": "/finances", "label": "Finances", "icon": "finances",
+   "active": nav_path == "/finances"},
+  {"href": "/settings", "label": "Settings", "icon": "settings",
+   "active": nav_path == "/settings" or nav_path.startswith("/settings/")},
+] %}
+
+{% macro nav_icon(name) %}
+{% if name == "brief" %}
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"/></svg>
+{% elif name == "projects" %}
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+{% elif name == "schedule" %}
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>
+{% elif name == "history" %}
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l3.5 2"/></svg>
+{% elif name == "report" %}
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="13" width="3" height="5"/><rect x="12" y="9" width="3" height="9"/><rect x="17" y="6" width="3" height="12"/></svg>
+{% elif name == "finances" %}
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+{% elif name == "settings" %}
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+{% endif %}
+{% endmacro %}
+
+<div x-data="{ open: false }" class="group/menu fixed top-4 right-14 sm:top-6 sm:right-16 z-20">
+  <button
+    @click="open = !open"
+    @click.outside="open = false"
+    @keydown.escape.window="open = false"
+    aria-label="Menu"
+    aria-haspopup="true"
+    :aria-expanded="open"
+    class="relative w-8 h-8 flex items-center justify-center rounded-full text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 bg-[#faf6f1]/80 dark:bg-stone-900/80 backdrop-blur-sm"
+  >
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
+    <span class="icon-tooltip pointer-events-none absolute top-full right-0 mt-2 z-30 whitespace-nowrap rounded bg-stone-800 dark:bg-stone-700 px-2 py-1 text-[11px] text-white opacity-0 duration-0 delay-0 transition-opacity group-hover/menu:opacity-100 group-hover/menu:duration-150 group-hover/menu:delay-200">Menu</span>
+  </button>
+  <nav
+    :class="{ 'nav-rail-open': open }"
+    class="nav-rail absolute right-full top-0 mr-2 flex items-center gap-1.5"
+    aria-label="Navigation"
+  >
+    {% for item in nav_items %}
+    <a
+      href="{{ item.href }}"
+      aria-label="{{ item.label }}"
+      class="group/item relative w-8 h-8 flex items-center justify-center rounded-full {{ 'bg-[#faece7] dark:bg-rust-light/10 text-rust dark:text-rust-light' if item.active else 'bg-[#faf6f1]/80 dark:bg-stone-900/80 backdrop-blur-sm text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-100 dark:hover:bg-stone-700' }}"
+    >
+      {{ nav_icon(item.icon) }}
+      <span class="nav-item-tooltip pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 z-30 whitespace-nowrap rounded bg-stone-800 dark:bg-stone-700 px-2 py-1 text-[11px] text-white opacity-0 duration-0 delay-0 transition-opacity group-hover/item:opacity-100 group-hover/item:duration-150 group-hover/item:delay-200">{{ item.label }}</span>
+    </a>
+    {% endfor %}
+  </nav>
+</div>
+
+<button
+  x-data="{ dark: document.documentElement.classList.contains('dark') }"
+  @click="dark = !dark; document.documentElement.classList.toggle('dark', dark); localStorage.setItem('theme', dark ? 'dark' : 'light')"
+  aria-label="Toggle dark mode"
+  class="group fixed top-4 right-4 sm:top-6 sm:right-6 z-20 w-8 h-8 flex items-center justify-center rounded-full text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 bg-[#faf6f1]/80 dark:bg-stone-900/80 backdrop-blur-sm"
+>
+  <svg x-show="!dark" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>
+  <svg x-show="dark" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+  <span class="icon-tooltip pointer-events-none absolute top-full right-0 mt-2 z-30 whitespace-nowrap rounded bg-stone-800 dark:bg-stone-700 px-2 py-1 text-[11px] text-white opacity-0 duration-0 delay-0 transition-opacity group-hover:opacity-100 group-hover:duration-150 group-hover:delay-200">Toggle theme</span>
+</button>
+
+{% block content %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}Command Center — {{ project.name }}{% endblock %}
+{% block content %}
+<script>
+  document.addEventListener('alpine:init', () => {
+    // item_card.html's Snooze/Done buttons reference $store.counts to
+    // live-decrement a lane badge that only exists on /brief — an empty
+    // store here just makes that decrement a harmless no-op instead of
+    // throwing and blocking the actual fetch() call that follows it.
+    Alpine.store('counts', {});
+  });
+</script>
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">{{ project.name }}</h1>
+    <a href="/projects" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to projects</a>
+  </div>
+  <div class="text-xs text-stone-500 dark:text-stone-400 mt-1">{{ project.path }}</div>
+</header>
+
+{% macro file_icon(node) %}
+  {% if node.type == "dir" %}
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+  {% elif node.category == "code" %}
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+  {% elif node.category == "config" %}
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+  {% elif node.category == "doc" %}
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/></svg>
+  {% else %}
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+  {% endif %}
+{% endmacro %}
+
+{% macro render_tree(node) %}
+  {% if node.type == "dir" %}
+  <details class="pl-2 border-l border-stone-200 dark:border-stone-700">
+    <summary class="flex items-center gap-1.5 cursor-pointer text-stone-700 dark:text-stone-300 select-none text-xs py-1">
+      {{ file_icon(node) }}<span>{{ node.name }}/</span>
+    </summary>
+    <div class="pl-2">
+      {% for child in node.children %}{{ render_tree(child) }}{% endfor %}
+    </div>
+  </details>
+  {% else %}
+  <div class="flex items-center gap-1.5 pl-2 py-1 text-xs {{ 'text-stone-400 dark:text-stone-500 italic' if node.name.startswith('.') else 'text-stone-600 dark:text-stone-300' }}">
+    {{ file_icon(node) }}<span class="truncate">{{ node.name }}</span>
+  </div>
+  {% endif %}
+{% endmacro %}
+
+<main class="px-4 sm:px-6 py-6 max-w-5xl">
+  {% set has_right_column = last_worked_on or linked_items or file_tree %}
+  <div class="{{ 'lg:flex lg:items-start lg:gap-6' if has_right_column else '' }}">
+  <div class="max-w-2xl space-y-4 {{ 'lg:w-2/3 lg:max-w-none' if has_right_column else '' }}">
+
+    <div
+      x-data='{
+        editing: false,
+        active: {{ "true" if project.active else "false" }},
+        description: {{ project.description | tojson }},
+        current_sprint: {{ (project.current_sprint or "") | tojson }},
+        sprint_goal: {{ (project.sprint_goal or "") | tojson }},
+        blockers: {{ (project.blockers or "") | tojson }},
+        target_date: {{ (project.target_date or "") | tojson }},
+        error: "",
+        save() {
+          this.error = "";
+          fetch("/projects/{{ project.id }}", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              description: this.description,
+              current_sprint: this.current_sprint,
+              sprint_goal: this.sprint_goal,
+              blockers: this.blockers,
+              target_date: this.target_date,
+            }),
+          }).then(async r => {
+            if (r.ok) { this.editing = false; return; }
+            const data = await r.json().catch(() => ({}));
+            this.error = data.detail || "Could not save changes.";
+          });
+        },
+        toggleActive() {
+          this.error = "";
+          const value = this.active;
+          fetch("/projects/{{ project.id }}", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ active: value }),
+          }).then(r => { if (!r.ok) { this.active = !value; this.error = "Could not save — try again."; } });
+        },
+        remove() {
+          if (!confirm("Delete this project? Linked tasks will keep their history but lose the project link.")) return;
+          this.error = "";
+          fetch("/projects/{{ project.id }}", { method: "DELETE" }).then(r => {
+            if (r.ok) { window.location.href = "/projects"; }
+            else { this.error = "Could not delete — try again."; }
+          });
+        }
+      }'
+      class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-5"
+    >
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <label class="flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-300">
+          <input type="checkbox" x-model="active" @change="toggleActive()" class="accent-rust">
+          Active
+        </label>
+        <div class="flex gap-2">
+          <button type="button" x-show="!editing" @click="editing = true" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">Edit</button>
+          <button type="button" x-show="editing" @click="save()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium">Save</button>
+          <button type="button" x-show="editing" @click="editing = false" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">Cancel</button>
+          <button type="button" @click="remove()" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-red-600 dark:hover:text-red-400">Delete</button>
+        </div>
+      </div>
+
+      <template x-if="!editing">
+        <div>
+          <p x-show="description" x-text="description" class="text-sm text-stone-600 dark:text-stone-400 mb-4"></p>
+
+          <div x-show="current_sprint" x-text="current_sprint" class="text-[11px] uppercase tracking-wide text-stone-400 dark:text-stone-500 mb-1"></div>
+          <div x-show="sprint_goal" x-text="sprint_goal" class="font-serif text-xl text-stone-900 dark:text-stone-100 leading-snug mb-3"></div>
+
+          <div x-show="blockers" class="flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 px-3 py-2 mb-3">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div>
+              <div class="text-[11px] uppercase tracking-wide text-amber-700 dark:text-amber-400 font-medium">Blockers</div>
+              <div x-text="blockers" class="text-sm text-amber-800 dark:text-amber-300"></div>
+            </div>
+          </div>
+
+          <div x-show="target_date" class="text-xs text-stone-500 dark:text-stone-400">Target: <span x-text="target_date" class="text-stone-700 dark:text-stone-300 font-medium"></span></div>
+
+          <p x-show="!description && !current_sprint && !sprint_goal && !blockers && !target_date" class="text-xs text-stone-400 dark:text-stone-500 italic">No sprint info yet — click Edit to add some.</p>
+        </div>
+      </template>
+      <template x-if="editing">
+        <div class="space-y-2">
+          <textarea x-model="description" placeholder="Description" rows="2" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"></textarea>
+          <input type="text" x-model="current_sprint" placeholder="Current sprint (e.g. Sprint 14)" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          <textarea x-model="sprint_goal" placeholder="Sprint goal" rows="2" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"></textarea>
+          <textarea x-model="blockers" placeholder="Blockers" rows="2" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"></textarea>
+          <input type="date" x-model="target_date" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+      </template>
+      <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-2"></p>
+    </div>
+
+  </div>
+
+  {% if has_right_column %}
+  <aside class="mt-6 lg:mt-0 lg:w-1/3 lg:sticky lg:top-6 lg:self-start space-y-3">
+
+    <div class="rounded-lg bg-stone-100 dark:bg-stone-800/50 p-4">
+      <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Last worked on</div>
+      {% if last_worked_on %}
+      <div class="text-sm text-stone-900 dark:text-stone-100 mt-1">{{ relative_time }}</div>
+      <div class="text-xs text-stone-600 dark:text-stone-300 mt-0.5 break-words">{{ last_worked_on.detail }}</div>
+      {% else %}
+      <div class="text-xs text-stone-400 dark:text-stone-500 italic mt-1">No activity detected yet.</div>
+      {% endif %}
+
+      <div class="border-t border-stone-200 dark:border-stone-700 mt-3 pt-3">
+        <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-2">Tasks</div>
+        {% if linked_items %}
+          {% for item in linked_items %}
+            {% set is_history = true %}
+            {% set full_height = true %}
+            {% include "partials/item_card.html" %}
+          {% endfor %}
+        {% else %}
+        <p class="text-xs text-stone-400 dark:text-stone-500 italic">No tasks linked to this project yet.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <details class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800">
+      <summary class="flex items-center gap-1.5 px-3 py-2 cursor-pointer text-xs text-stone-500 dark:text-stone-400 select-none hover:text-stone-900 dark:hover:text-stone-100">
+        <span>Files</span>
+        {% if file_count %}<span class="text-stone-400 dark:text-stone-500">&middot; {{ file_count }}</span>{% endif %}
+      </summary>
+      {% if file_tree %}
+      <div class="max-h-[50vh] overflow-y-auto text-xs px-3 pb-3">
+        {% for child in file_tree.children %}{{ render_tree(child) }}{% endfor %}
+      </div>
+      {% else %}
+      <p class="text-xs text-stone-400 dark:text-stone-500 italic px-3 pb-3">No files found at this path.</p>
+      {% endif %}
+    </details>
+
+  </aside>
+  {% endif %}
+  </div>
+</main>
+{% endblock %}

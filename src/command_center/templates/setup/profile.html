@@ -1,0 +1,92 @@
+{% extends "setup/_setup_base.html" %}
+{% block title %}Setup — Profile{% endblock %}
+{% block setup_content %}
+<div x-data='profileStep({{ state.profile | tojson }})'>
+  <h1 class="font-serif text-2xl text-stone-900 dark:text-stone-100">Tell us about you</h1>
+  <p class="mt-2 text-sm text-stone-600 dark:text-stone-300">This shows up on your portfolio page.</p>
+
+  <div class="mt-6 space-y-4">
+    <div>
+      <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">Name</label>
+      <input type="text" x-model="name" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+      <p x-show="errors.name" x-text="errors.name" class="mt-1 text-xs text-rust dark:text-rust-light"></p>
+    </div>
+    <div>
+      <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">Title</label>
+      <input type="text" x-model="title" placeholder="e.g. Software Engineer" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+      <p x-show="errors.title" x-text="errors.title" class="mt-1 text-xs text-rust dark:text-rust-light"></p>
+    </div>
+    <div>
+      <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">Bio</label>
+      <textarea x-model="tagline" rows="2" placeholder="One sentence about what you build or work on." class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"></textarea>
+      <p x-show="errors.tagline" x-text="errors.tagline" class="mt-1 text-xs text-rust dark:text-rust-light"></p>
+    </div>
+  </div>
+
+  <div class="mt-8">
+    <div class="flex items-center justify-between mb-2">
+      <label class="text-xs text-stone-500 dark:text-stone-400">Projects (optional)</label>
+      <button type="button" @click="addProject()" class="text-xs text-rust dark:text-rust-light hover:underline">+ Add project</button>
+    </div>
+    <template x-for="(project, index) in projects" :key="index">
+      <div class="mb-3 p-3 rounded border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 space-y-2">
+        <div class="flex gap-2">
+          <input type="text" x-model="project.name" placeholder="Project name" class="min-w-0 flex-1 text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100">
+          <select x-model="project.status_tag" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100">
+            <option>Shipping</option>
+            <option>Testing</option>
+            <option>Competing</option>
+          </select>
+          <button type="button" @click="projects.splice(index, 1)" class="text-stone-400 dark:text-stone-500 hover:text-rust dark:hover:text-rust-light" aria-label="Remove project">&times;</button>
+        </div>
+        <input type="text" x-model="project.sentence" placeholder="One-line description" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100">
+        <input type="text" x-model="project.link" placeholder="Link (optional)" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100">
+      </div>
+    </template>
+    <p x-show="errors.projects" x-text="errors.projects" class="text-xs text-rust dark:text-rust-light"></p>
+  </div>
+
+  <button
+    type="button"
+    :disabled="submitting"
+    @click="submit()"
+    class="mt-8 text-sm px-5 py-2.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50"
+  >Continue</button>
+</div>
+
+<script>
+  function profileStep(initial) {
+    return {
+      name: initial.name || '',
+      title: initial.title || '',
+      tagline: initial.tagline || '',
+      projects: (initial.projects && initial.projects.length) ? initial.projects : [],
+      errors: {},
+      submitting: false,
+      addProject() {
+        this.projects.push({ name: '', sentence: '', status_tag: 'Shipping', link: '' });
+      },
+      submit() {
+        this.errors = {};
+        this.submitting = true;
+        fetch('/setup/step/2', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: this.name,
+            title: this.title,
+            tagline: this.tagline,
+            projects: this.projects.filter(p => p.name.trim() || p.sentence.trim()),
+          }),
+        })
+          .then(r => r.json())
+          .then(data => {
+            this.submitting = false;
+            if (data.ok) { window.location.href = data.next_url; }
+            else { this.errors = data.errors || {}; }
+          });
+      },
+    };
+  }
+</script>
+{% endblock %}

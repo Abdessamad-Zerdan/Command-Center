@@ -1,0 +1,41 @@
+<article
+  x-data="{ removed: false }"
+  x-show="!removed"
+  x-transition.duration.200ms
+  {% if not is_history %}
+  draggable="true"
+  @dragstart="$event.dataTransfer.setData('text/plain', '{{ item.id }}'); $event.dataTransfer.effectAllowed = 'move'"
+  {% endif %}
+  @click='$dispatch("item-modal-open", {{ item | tojson }})'
+  class="mb-2 {{ '' if full_height else 'max-h-[180px] overflow-y-auto' }} rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-3 py-3 cursor-pointer hover:border-stone-300 dark:hover:border-stone-600 {% if not is_history %}active:cursor-grabbing{% endif %} {% if item.priority == 1 %}border-l-2 border-l-rust dark:border-l-rust-light{% endif %}"
+>
+  <div class="flex items-start justify-between gap-2">
+    <h3 class="min-w-0 flex-1 break-words font-serif text-base text-stone-900 dark:text-stone-100 leading-snug">{{ item.title }}</h3>
+    <span class="shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-700 text-stone-500 dark:text-stone-400">{{ item.source }}</span>
+  </div>
+  {% if item.why_it_matters %}
+  <p class="mt-1.5 text-[15px] text-stone-600 dark:text-stone-300 leading-[1.4] break-words">{{ item.why_it_matters }}</p>
+  {% endif %}
+  {% if item.suggested_next_step %}
+  <p class="mt-1.5 text-[15px] text-stone-700 dark:text-stone-300 leading-[1.4] break-words"><span class="text-stone-500 dark:text-stone-400">Next:</span> {{ item.suggested_next_step }}</p>
+  {% endif %}
+  <div class="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+    {% if item.deep_link %}
+    <a href="{{ item.deep_link }}" target="_blank" rel="noopener" @click.stop class="text-sm text-rust dark:text-rust-light hover:text-[#9c4830] dark:hover:text-[#e08761] whitespace-nowrap">Open &#8599;</a>
+    {% else %}
+    <span></span>
+    {% endif %}
+    <div class="flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        @click.stop="fetch('/items/{{ item.id }}/snooze', { method: 'POST' }).then(r => { if (r.ok) { removed = true; $store.counts['{{ item.lane }}']--; } })"
+        class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
+      >Snooze</button>
+      <button
+        type="button"
+        @click.stop="fetch('/items/{{ item.id }}/done', { method: 'POST' }).then(r => { if (r.ok) { removed = true; $store.counts['{{ item.lane }}']--; } })"
+        class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
+      >Done</button>
+    </div>
+  </div>
+</article>
