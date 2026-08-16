@@ -1,0 +1,84 @@
+{% extends "setup/_setup_base.html" %}
+{% block title %}Setup — Test & finish{% endblock %}
+{% block setup_content %}
+<div x-data='testStep({{ state.test_results | tojson }})'>
+  <h1 class="font-serif text-2xl text-stone-900 dark:text-stone-100">Test your setup</h1>
+  <p class="mt-2 text-sm text-stone-600 dark:text-stone-300 leading-relaxed">
+    This checks each service for real before you finish.
+  </p>
+
+  <button
+    type="button"
+    :disabled="running"
+    @click="runTests()"
+    class="mt-6 text-sm px-5 py-2.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50"
+  ><span x-text="running ? 'Testing…' : 'Run tests'"></span></button>
+
+  <div class="mt-6 space-y-2">
+    <template x-for="service in ['groq', 'gmail', 'calendar', 'tasks', 'medium']" :key="service">
+      <div class="flex items-start justify-between gap-3 p-3 rounded border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800" x-show="results[service]">
+        <div class="min-w-0">
+          <div class="text-sm text-stone-900 dark:text-stone-100 capitalize" x-text="service"></div>
+          <div class="text-xs text-stone-500 dark:text-stone-400 break-words" x-text="results[service] && results[service].message"></div>
+        </div>
+        <span
+          class="shrink-0 text-xs px-2 py-0.5 rounded"
+          :class="{
+            'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300': results[service] && results[service].pass === true,
+            'bg-red-100 text-rust dark:bg-red-900 dark:text-rust-light': results[service] && results[service].pass === false,
+            'bg-stone-100 text-stone-500 dark:bg-stone-700 dark:text-stone-400': results[service] && results[service].pass === null,
+          }"
+          x-text="results[service] && (results[service].pass === true ? 'Pass' : results[service].pass === false ? 'Fail' : 'Skipped')"
+        ></span>
+      </div>
+    </template>
+  </div>
+
+  <p class="mt-4 text-xs text-stone-500 dark:text-stone-400">
+    Groq is required to finish. Gmail, Calendar, and Tasks will show as
+    not connected until you complete the Google steps in SETUP.md — that's
+    fine for now, the brief just shows sample data until then.
+  </p>
+
+  <button
+    type="button"
+    :disabled="!ready || finishing"
+    @click="finish()"
+    class="mt-6 text-sm px-5 py-2.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50"
+  ><span x-text="finishing ? 'Finishing…' : 'Enter app'"></span></button>
+  <p x-show="finishError" x-text="finishError" class="mt-2 text-xs text-rust dark:text-rust-light"></p>
+</div>
+<script>
+  function testStep(initialResults) {
+    return {
+      results: initialResults || {},
+      running: false,
+      finishing: false,
+      finishError: '',
+      get ready() {
+        return !!(this.results.groq && this.results.groq.pass === true);
+      },
+      runTests() {
+        this.running = true;
+        fetch('/setup/step/10', { method: 'POST' })
+          .then(r => r.json())
+          .then(data => {
+            this.running = false;
+            this.results = data.results;
+          });
+      },
+      finish() {
+        this.finishing = true;
+        this.finishError = '';
+        fetch('/setup/finish', { method: 'POST' })
+          .then(r => r.json())
+          .then(data => {
+            this.finishing = false;
+            if (data.ok) { window.location.href = data.next_url; }
+            else { this.finishError = (data.errors && data.errors.finish) || 'Something went wrong.'; }
+          });
+      },
+    };
+  }
+</script>
+{% endblock %}

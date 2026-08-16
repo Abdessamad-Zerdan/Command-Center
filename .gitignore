@@ -1,0 +1,11 @@
+credentials.json
+.env
+secrets/
+*.db
+__pycache__/
+.venv/
+*.log
+src/command_center/profile.py
+data/vision.md
+CLAUDE.md
+prompt.md

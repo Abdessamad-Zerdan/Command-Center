@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Projects{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Projects</h1>
+    <a href="/brief" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to brief</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div class="max-w-2xl space-y-3">
+
+    {% if not projects %}
+    <p class="text-xs text-stone-400 dark:text-stone-500 italic px-1">No projects registered yet — add one below.</p>
+    {% endif %}
+
+    {% for p in projects %}
+    <a
+      href="/projects/{{ p.id }}"
+      class="block rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 hover:border-stone-400 dark:hover:border-stone-500 {{ 'opacity-60' if not p.active else '' }}"
+    >
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="font-serif text-base text-stone-900 dark:text-stone-100">{{ p.name }}</div>
+          {% if p.description %}
+          <div class="text-xs text-stone-500 dark:text-stone-400 mt-0.5">{{ p.description }}</div>
+          {% endif %}
+          {% if p.current_sprint %}
+          <div class="text-xs text-stone-600 dark:text-stone-300 mt-1">
+            <span class="text-stone-400 dark:text-stone-500">Sprint:</span> {{ p.current_sprint }}
+          </div>
+          {% endif %}
+        </div>
+        {% if not p.active %}
+        <span class="shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-700 text-stone-500 dark:text-stone-400">Inactive</span>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+
+    <div
+      x-data="{
+        name: '', path: '', description: '', error: '',
+        submit() {
+          this.error = '';
+          fetch('/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: this.name, path: this.path, description: this.description }),
+          }).then(async r => {
+            if (r.ok) { location.reload(); return; }
+            const data = await r.json().catch(() => ({}));
+            this.error = data.detail || 'Could not register that project.';
+          });
+        }
+      }"
+      class="rounded-lg border border-dashed border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-4 py-3"
+    >
+      <div class="flex flex-wrap items-center gap-2">
+        <input type="text" x-model="name" placeholder="Name"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 flex-1 min-w-[8rem] focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <input type="text" x-model="path" placeholder="Local path (e.g. D:\projects\foo)"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 flex-1 min-w-[14rem] focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <input type="text" x-model="description" placeholder="Short description (optional)"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 flex-1 min-w-[10rem] focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <button @click="submit()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Register
+        </button>
+      </div>
+      <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-2"></p>
+    </div>
+
+  </div>
+</main>
+{% endblock %}

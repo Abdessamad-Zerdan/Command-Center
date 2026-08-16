@@ -1,0 +1,441 @@
+"""Grounded Q&A (Part 1) plus task tool-calling (Part 2), same entry
+point. Read-only chunks/live-brief context is unchanged from Part 1;
+tool-calling is an additional branch in answer() — a plain question
+still gets a plain-text answer via the exact same path as before.
+
+Live state (brief items, task ids) is fetched fresh on every call rather
+than being ingested into the vector store — see ingest.py's docstring
+for why.
+
+Conversation history is threaded in from the browser (see `history`
+below) but never persisted — "session-only" per the original scope means
+kept in the tab's memory, not written to disk. Without it, "the
+assistant asks a clarifying question, you answer it" wouldn't actually
+work: each call would otherwise be a fresh, memory-less exchange, so a
+reply like "next Friday" would arrive with no idea what it's answering.
+"""
+
+import logging
+import re
+from datetime import datetime
+
+from command_center import auth, pipeline, queries, triage
+from command_center.assistant import retrieval, tools
+from command_center.config import LANES, PROFILE, TZ
+
+logger = logging.getLogger(__name__)
+
+TOP_K = 5
+
+_SENTENCE_SPLIT_RE = re.compile(r"[.!?]+(?:\s+|$)")
+_MIN_DUMP_LENGTH = 60  # chars — guards against 3 short clauses false-positiving
+
+
+def _looks_like_brain_dump(question: str) -> bool:
+    """Cheap local heuristic, zero Groq calls. A brain dump reads as
+    multiple loose thoughts rather than a single question or request:
+    either one-thought-per-line (also catches '-'/'*'/'1.'-prefixed
+    lists for free, since those are just separate lines), or several
+    sentence-like clauses packed into one paragraph. A short question
+    ending in '?' with 1-2 segments never matches either branch. A
+    single long run-on sentence with no line breaks or terminal
+    punctuation also won't match — it falls through to the normal flow,
+    a safe default (worst case: one more clarifying-question round-trip,
+    same as today).
+    """
+    lines = [line.strip() for line in question.splitlines() if line.strip()]
+    if len(lines) >= 3:
+        return True
+
+    if len(question) < _MIN_DUMP_LENGTH:
+        return False
+
+    segments = [s for s in _SENTENCE_SPLIT_RE.split(question) if s.strip()]
+    return len(segments) >= 3
+
+
+SYSTEM_PROMPT_TEMPLATE = (
+    "You are a personal assistant answering questions about {name} and, "
+    "when asked, creating/updating/completing their Google Tasks. "
+    "Answer plain questions using only the context provided below (their "
+    "vision document, portfolio, and current tasks). If the context "
+    "doesn't answer the question, say \"I don't have that information\" "
+    "— don't guess beyond what's given.\n\n"
+    "Only call a tool when the user clearly asks to create, change, or "
+    "complete a task. Before calling create_task: if they haven't stated "
+    "a due date, ask them for one in plain text first — never invent or "
+    "assume one. If they explicitly stated urgency or named a lane "
+    "directly ('urgent', 'asap', 'this is important', 'add it to my "
+    "meeting prep'), set create_task's lane field to match — otherwise "
+    "omit it entirely and let it be classified automatically; don't ask "
+    "about urgency if they didn't bring it up themselves. If they said "
+    "the task relates to one of the registered projects listed in "
+    "context below, set project_id to that project's exact numeric id "
+    "— never invent one or guess from a name that isn't in the list; "
+    "omit it entirely if no project was mentioned. Only call "
+    "create_task once you actually have the due date (or the user says "
+    "there isn't one) — don't call it just to ask a question. For "
+    "update_task or complete_task you must use a real task id from the "
+    "task list given in context — never invent one. If you can't tell "
+    "which task the user means, ask a clarifying question in plain "
+    "text instead of guessing."
+)
+
+EXTRACTION_SYSTEM_PROMPT = (
+    "The user has sent a free-form brain dump — multiple loose thoughts, "
+    "not a single question or request. Call extract_tasks with one entry "
+    "per distinct actionable item you can identify in their message. "
+    "Use YYYY-MM-DD for due_date, resolving relative dates ('Friday', "
+    "'next week') against today's date given below — omit due_date "
+    "entirely if no date was mentioned for that item. Put any other "
+    "detail that isn't the title or due date in notes. Don't invent "
+    "items, merge unrelated ones, or ask a clarifying question — just "
+    "extract what's there. If nothing in the message reads as an "
+    "actionable task, call extract_tasks with an empty tasks list."
+)
+
+
+def _today() -> str:
+    return datetime.now(TZ).date().isoformat()
+
+
+def _live_brief_summary() -> str:
+    brief = queries.get_brief(_today())
+    if brief is None:
+        return "No brief has been generated yet today."
+
+    lines = []
+    for lane, items in brief["lanes"].items():
+        if not items:
+            continue
+        titles = ", ".join(item["title"] for item in items)
+        lines.append(f"{lane}: {titles}")
+    return "\n".join(lines) if lines else "No pending items today."
+
+
+def _live_task_context() -> tuple[str, dict[str, str]]:
+    """(display text for the prompt, id -> title lookup). Only
+    google_tasks-sourced items have a real Google task id in source_id —
+    that's what update_task/complete_task need, not our internal row id.
+    """
+    brief = queries.get_brief(_today())
+    if brief is None:
+        return "No tasks available.", {}
+
+    task_items = [
+        item
+        for items in brief["lanes"].values()
+        for item in items
+        if item["source"] == "google_tasks"
+    ]
+    if not task_items:
+        return "No tasks available.", {}
+
+    title_lookup = {item["source_id"]: item["title"] for item in task_items}
+    context_text = "\n".join(f"{item['source_id']}: {item['title']}" for item in task_items)
+    return context_text, title_lookup
+
+
+def _project_context() -> tuple[str, dict[int, str]]:
+    """(display text for the prompt, id -> name lookup) — same shape as
+    _live_task_context, so create_task's project_id can reference a real
+    registered project's id rather than a guessed/invented one."""
+    projects = queries.list_registered_projects(active_only=True)
+    if not projects:
+        return "No registered projects.", {}
+    project_lookup = {p["id"]: p["name"] for p in projects}
+    context_text = "\n".join(f"{p['id']}: {p['name']}" for p in projects)
+    return context_text, project_lookup
+
+
+def _extract_tasks(question: str) -> list[dict]:
+    """Runs extraction through the same Groq call path as single-action
+    tool calls (triage.run_groq_chat_with_tools), scoped to only the
+    extract_tasks schema — deliberately not the full context block
+    (retrieved chunks, live brief, live task list) answer() normally
+    injects, since extraction only needs the raw dump text plus a
+    today's-date instruction for relative-date resolution. Returns a
+    list of {"title": str, "due_date": str|None, "notes": str|None}
+    dicts — already shaped as valid create_task args, so each one can be
+    handed straight to tools.describe_pending/tools.dispatch without
+    translation. Malformed or missing data degrades to dropping that
+    item, or an empty list — never raises.
+    """
+    today = datetime.now(TZ)
+    user_content = (
+        f"Today's date is {today.strftime('%A, %Y-%m-%d')}. Resolve relative "
+        f"dates ('next Friday', 'tomorrow') against this, not your training "
+        f"data — use it to compute due_date in YYYY-MM-DD format.\n\n"
+        f"Message:\n{question}"
+    )
+    messages = [
+        {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+    result = triage.run_groq_chat_with_tools(messages, tools=tools.EXTRACT_TASKS_SCHEMA)
+
+    if not result["tool_calls"]:
+        return []
+
+    call = result["tool_calls"][0]
+    if call["name"] != "extract_tasks" or not isinstance(call["arguments"], dict):
+        return []
+
+    raw_tasks = call["arguments"].get("tasks")
+    if not isinstance(raw_tasks, list):
+        return []
+
+    extracted = []
+    for item in raw_tasks:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        if not title or not str(title).strip():
+            continue
+        extracted.append(
+            {
+                "title": str(title).strip(),
+                "due_date": item.get("due_date") or None,
+                "notes": item.get("notes") or None,
+            }
+        )
+    return extracted
+
+
+def answer(question: str, history: list[dict] | None = None) -> dict:
+    if not history and _looks_like_brain_dump(question):
+        extracted = _extract_tasks(question)
+
+        if len(extracted) >= 2:
+            for task in extracted:
+                queries.log_tool_call("create_task", task, "proposed")
+            return {
+                "pending_batch": {
+                    "tasks": [
+                        {
+                            "tool": "create_task",
+                            "args": task,
+                            "confirmation_text": tools.describe_pending("create_task", task, {}),
+                        }
+                        for task in extracted
+                    ],
+                }
+            }
+
+        if len(extracted) == 1:
+            task = extracted[0]
+            queries.log_tool_call("create_task", task, "proposed")
+            return {
+                "pending_action": {
+                    "tool": "create_task",
+                    "args": task,
+                    "confirmation_text": tools.describe_pending("create_task", task, {}),
+                }
+            }
+
+        # 0 extracted — fall through to the normal single-action flow
+        # below, exactly as if the brain-dump branch had never fired.
+
+    chunks = retrieval.top_k(question, k=TOP_K)
+    context_text = "\n\n".join(f"[{c['section']}]\n{c['content']}" for c in chunks)
+    live_state = _live_brief_summary()
+    task_context, title_lookup = _live_task_context()
+    project_context, project_lookup = _project_context()
+
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(name=PROFILE["name"])
+    today = datetime.now(TZ)
+    user_content = (
+        f"Today's date is {today.strftime('%A, %Y-%m-%d')}. Resolve relative "
+        f"dates ('next Friday', 'tomorrow') against this, not your training "
+        f"data — use it to compute due_date in YYYY-MM-DD format.\n\n"
+        f"Context:\n{context_text}\n\n"
+        f"Current tasks (today's brief):\n{live_state}\n\n"
+        f"Tasks you can reference by id (for update_task/complete_task):\n{task_context}\n\n"
+        f"Registered projects you can reference by id (for create_task's project_id):\n{project_context}\n\n"
+        f"Question: {question}"
+    )
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for turn in history or []:
+        messages.append({"role": turn["role"], "content": turn["content"]})
+    messages.append({"role": "user", "content": user_content})
+
+    result = triage.run_groq_chat_with_tools(messages, tools=tools.TOOL_SCHEMAS)
+
+    if result["tool_calls"]:
+        call = result["tool_calls"][0]  # one proposed action per turn
+        error = tools.validate_args(call["name"], call["arguments"])
+        if error:
+            logger.info("Malformed tool call from Groq: %s (%s)", call["name"], error)
+            queries.log_tool_call(call["name"], call["arguments"] or {}, "proposed")
+            return {
+                "answer": "I couldn't quite work out what you wanted to change — could you rephrase that?",
+                "sources": [],
+            }
+
+        queries.log_tool_call(call["name"], call["arguments"], "proposed")
+        return {
+            "pending_action": {
+                "tool": call["name"],
+                "args": call["arguments"],
+                "confirmation_text": tools.describe_pending(
+                    call["name"], call["arguments"], title_lookup, project_lookup
+                ),
+            }
+        }
+
+    sources = list(dict.fromkeys(c["section"] for c in chunks))  # dedup, keep order
+    return {"answer": result["content"] or "", "sources": sources}
+
+
+def _apply_create_task_overrides(created_task_id: str | None, args: dict) -> None:
+    """create_task's lane/project_id args have no home in Google Tasks
+    itself (it has no such fields) and no effect on triage's own
+    classification of the local mirror row the pull above just inserted
+    — that row's lane is whatever triage's LLM decided from the title/
+    notes alone, independent of what the user told the assistant. This
+    explicitly overrides it after the fact, using the same
+    update_item_lane/update_item_project the manual-edit UI already
+    uses. Skipped silently if the pull didn't produce a matching local
+    row (e.g. that source's triage degraded this pull) — same
+    best-effort posture as the rest of this sync.
+    """
+    if not created_task_id:
+        return
+    item_id = queries.get_item_id_by_source("google_tasks", created_task_id)
+    if item_id is None:
+        logger.warning(
+            "Could not find local item for newly created task %s — skipping lane/project override",
+            created_task_id,
+        )
+        return
+    lane = args.get("lane")
+    if lane in LANES:
+        queries.update_item_lane(item_id, lane)
+    project_id = tools.coerce_project_id(args.get("project_id"))
+    if project_id is not None:
+        queries.update_item_project(item_id, project_id)
+
+
+def _sync_local_task_state(tool_name: str, args: dict, result: dict | None) -> None:
+    """Keeps /brief and the assistant's own context in sync with what
+    just happened in Google Tasks — otherwise a newly created task
+    wouldn't appear until the next scheduled pull (up to an hour later),
+    and an update/complete wouldn't be reflected at all (a re-pull uses
+    INSERT OR IGNORE, so it never touches an already-existing row).
+    Best-effort: the real Google Tasks change already succeeded by the
+    time this runs, so a sync failure here is logged, not surfaced.
+    """
+    try:
+        if tool_name == "create_task":
+            pipeline.run_source("tasks")  # new source_id — a full pull triages it in
+            _apply_create_task_overrides((result or {}).get("id"), args)
+        elif tool_name == "update_task" and args.get("title"):
+            queries.update_item_from_task(args["task_id"], title=args["title"])
+        elif tool_name == "complete_task":
+            queries.update_item_from_task(args["task_id"], status="done")
+    except Exception:
+        logger.exception("Failed to sync local task state after %s", tool_name)
+
+
+def confirm_action(pending_action: dict, confirmed: bool) -> dict:
+    tool_name = pending_action.get("tool")
+    args = pending_action.get("args") or {}
+
+    if not confirmed:
+        queries.log_tool_call(tool_name, args, "cancelled")
+        return {"answer": "Okay, not making that change.", "sources": []}
+
+    try:
+        credentials = auth.get_google_credentials()
+        result = tools.dispatch(tool_name, args, credentials)
+    except auth.AuthNotConfigured as exc:
+        queries.log_tool_call(tool_name, args, "failed")
+        return {"answer": str(exc), "sources": []}
+    except Exception:
+        logger.exception("Tool call failed: %s", tool_name)
+        queries.log_tool_call(tool_name, args, "failed")
+        return {
+            "answer": "Couldn't reach Google Tasks — try again in a moment.",
+            "sources": [],
+        }
+
+    queries.log_tool_call(tool_name, args, "confirmed")
+    # Resolve the title before syncing local state — for complete_task,
+    # the sync flips the item to status='done', which drops it out of
+    # get_brief()'s pending-only results, so a lookup taken afterwards
+    # would miss it and describe_done would fall back to the raw id.
+    _, title_lookup = _live_task_context()
+    _, project_lookup = _project_context()
+    _sync_local_task_state(tool_name, args, result)
+    return {
+        "answer": tools.describe_done(tool_name, args, title_lookup, project_lookup),
+        "sources": [],
+    }
+
+
+def confirm_batch(tasks: list[dict], confirmed: bool) -> dict:
+    """Batch counterpart to confirm_action — loops over the existing
+    tools.dispatch("create_task", ...) rather than a new bulk-create
+    function. The frontend always sends the full original candidate
+    list (checked and unchecked alike), so every item proposed in
+    answer()'s batch branch gets exactly one terminal-status row here —
+    nothing is left permanently "proposed".
+    """
+    if not confirmed:
+        for task in tasks:
+            queries.log_tool_call(task.get("tool") or "create_task", task.get("args") or {}, "cancelled")
+        return {"answer": "Okay, not creating those tasks.", "sources": []}
+
+    checked = [t for t in tasks if t.get("checked")]
+    unchecked = [t for t in tasks if not t.get("checked")]
+    for task in unchecked:
+        queries.log_tool_call(task.get("tool") or "create_task", task.get("args") or {}, "cancelled")
+
+    if not checked:
+        return {"answer": "Okay, not creating those tasks.", "sources": []}
+
+    try:
+        credentials = auth.get_google_credentials()
+    except auth.AuthNotConfigured as exc:
+        for task in checked:
+            queries.log_tool_call(task.get("tool") or "create_task", task.get("args") or {}, "failed")
+        return {"answer": str(exc), "sources": []}
+
+    created_titles: list[str] = []
+    failed_titles: list[str] = []
+
+    for task in checked:
+        args = task.get("args") or {}
+        tool_name = task.get("tool") or "create_task"
+        try:
+            tools.dispatch(tool_name, args, credentials)
+        except Exception:
+            logger.exception("Batch tool call failed: %s", tool_name)
+            queries.log_tool_call(tool_name, args, "failed")
+            failed_titles.append(args.get("title") or "untitled task")
+            continue
+        queries.log_tool_call(tool_name, args, "confirmed")
+        created_titles.append(args.get("title") or "untitled task")
+
+    if created_titles:
+        # Same reasoning as _sync_local_task_state's create_task branch —
+        # new source_ids need a full pull to get triaged into the local
+        # items table. Inlined here (once, after the loop) rather than
+        # reused, since that function's other two branches don't apply
+        # to a batch of creates. Best-effort: the real Google Tasks
+        # creates already succeeded by the time this runs.
+        try:
+            pipeline.run_source("tasks")
+        except Exception:
+            logger.exception("Failed to sync local task state after batch create")
+
+    parts = []
+    if created_titles:
+        plural = "s" if len(created_titles) != 1 else ""
+        parts.append(
+            f"Created {len(created_titles)} task{plural}: " + ", ".join(f"'{t}'" for t in created_titles)
+        )
+    if failed_titles:
+        parts.append(f"Couldn't create {len(failed_titles)}: " + ", ".join(f"'{t}'" for t in failed_titles))
+    return {"answer": " ".join(parts) or "Okay, not creating those tasks.", "sources": []}

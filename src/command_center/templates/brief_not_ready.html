@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Brief{% endblock %}
+{% block content %}
+<div class="min-h-screen flex flex-col items-center justify-center px-4 py-10 sm:py-16 text-center">
+  <div class="w-full max-w-md">
+    <div class="font-serif text-xl text-stone-900 dark:text-stone-100 mb-2">Today's brief hasn't been generated yet</div>
+    <p class="text-sm text-stone-600 dark:text-stone-400 mb-6">
+      This can happen right after starting the app for the first time, or if the last pull failed.
+    </p>
+    <form method="post" action="/rerun">
+      <button class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium">
+        Generate it now
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

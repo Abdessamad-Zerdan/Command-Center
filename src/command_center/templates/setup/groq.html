@@ -1,0 +1,49 @@
+{% extends "setup/_setup_base.html" %}
+{% block title %}Setup — Groq key{% endblock %}
+{% block setup_content %}
+<div x-data='groqStep({{ state.credentials.groq_api_key | tojson }})'>
+  <h1 class="font-serif text-2xl text-stone-900 dark:text-stone-100">Connect Groq</h1>
+  <p class="mt-2 text-sm text-stone-600 dark:text-stone-300 leading-relaxed">
+    Groq powers the triage that sorts your inbox and calendar into the
+    daily brief. The free tier is enough to get started.
+  </p>
+  <a href="https://console.groq.com/keys" target="_blank" rel="noopener" class="mt-4 inline-block text-sm text-rust dark:text-rust-light hover:underline">Open console.groq.com/keys &#8599;</a>
+
+  <div class="mt-6">
+    <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">Groq API key</label>
+    <input type="text" x-model="key" placeholder="gsk_..." class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+    <p x-show="error" x-text="error" class="mt-1 text-xs text-rust dark:text-rust-light"></p>
+  </div>
+
+  <button
+    type="button"
+    :disabled="submitting"
+    @click="submit()"
+    class="mt-8 text-sm px-5 py-2.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50"
+  >Continue</button>
+</div>
+<script>
+  function groqStep(initialKey) {
+    return {
+      key: initialKey || '',
+      error: '',
+      submitting: false,
+      submit() {
+        this.error = '';
+        this.submitting = true;
+        fetch('/setup/step/7', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groq_api_key: this.key }),
+        })
+          .then(r => r.json())
+          .then(data => {
+            this.submitting = false;
+            if (data.ok) { window.location.href = data.next_url; }
+            else { this.error = (data.errors && data.errors.groq_api_key) || 'Something went wrong.'; }
+          });
+      },
+    };
+  }
+</script>
+{% endblock %}

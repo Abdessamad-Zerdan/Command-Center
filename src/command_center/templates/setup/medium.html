@@ -1,0 +1,55 @@
+{% extends "setup/_setup_base.html" %}
+{% block title %}Setup — Medium (optional){% endblock %}
+{% block setup_content %}
+<div x-data='mediumStep({{ state.credentials.medium_api_key | tojson }}, {{ state.credentials.medium_username | tojson }})'>
+  <div class="inline-block text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-700 text-stone-500 dark:text-stone-400 mb-3">Optional</div>
+  <h1 class="font-serif text-2xl text-stone-900 dark:text-stone-100">Add your Medium feed</h1>
+  <p class="mt-2 text-sm text-stone-600 dark:text-stone-300 leading-relaxed">
+    Adds a "Reading" lane with articles picked for your interests. Skip
+    this if you don't use Medium — nothing else depends on it.
+  </p>
+  <a href="https://rapidapi.com/nishujain199719-vgIfuFHZxVz/api/medium2" target="_blank" rel="noopener" class="mt-4 inline-block text-sm text-rust dark:text-rust-light hover:underline">Open the Medium API on RapidAPI &#8599;</a>
+
+  <div class="mt-6 space-y-4">
+    <div>
+      <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">RapidAPI key</label>
+      <input type="text" x-model="apiKey" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+    </div>
+    <div>
+      <label class="block text-xs text-stone-500 dark:text-stone-400 mb-1">Medium username</label>
+      <input type="text" x-model="username" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+    </div>
+    <p x-show="error" x-text="error" class="text-xs text-rust dark:text-rust-light"></p>
+  </div>
+
+  <div class="mt-8 flex items-center gap-3">
+    <button type="button" :disabled="submitting" @click="submit(false)" class="text-sm px-5 py-2.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">Continue</button>
+    <button type="button" :disabled="submitting" @click="submit(true)" class="text-sm text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">Skip for now</button>
+  </div>
+</div>
+<script>
+  function mediumStep(initialKey, initialUsername) {
+    return {
+      apiKey: initialKey || '',
+      username: initialUsername || '',
+      error: '',
+      submitting: false,
+      submit(skip) {
+        this.error = '';
+        this.submitting = true;
+        fetch('/setup/step/8', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ medium_api_key: this.apiKey, medium_username: this.username, skip: skip }),
+        })
+          .then(r => r.json())
+          .then(data => {
+            this.submitting = false;
+            if (data.ok) { window.location.href = data.next_url; }
+            else { this.error = (data.errors && data.errors.medium) || 'Something went wrong.'; }
+          });
+      },
+    };
+  }
+</script>
+{% endblock %}

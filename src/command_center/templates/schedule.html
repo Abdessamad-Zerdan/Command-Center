@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Schedule{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Schedule</h1>
+    <a href="/brief" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to brief</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div class="max-w-2xl" x-data="suggestSchedule()">
+    <div class="flex items-baseline justify-between mb-4">
+      <div class="text-sm font-serif text-stone-900 dark:text-stone-100">{{ week_label }}</div>
+      <div class="flex items-center gap-3">
+        <button
+          type="button"
+          @click="suggest()"
+          :disabled="loading"
+          class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50 whitespace-nowrap"
+        >
+          <span x-show="!loading">Suggest schedule</span>
+          <span x-show="loading">Suggesting&hellip;</span>
+        </button>
+        <a href="/settings/schedule" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline whitespace-nowrap">Manage recurring commitments</a>
+      </div>
+    </div>
+
+    <div class="space-y-3 mb-6">
+      {% for day in days %}
+      <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 {{ 'border-l-2 border-l-rust dark:border-l-rust-light' if day.is_today else '' }}">
+        <div class="flex items-baseline justify-between mb-2">
+          <div class="font-serif text-base text-stone-900 dark:text-stone-100">
+            {{ day.label }} <span class="text-xs text-stone-400 dark:text-stone-500 font-sans">{{ day.date_label }}</span>
+          </div>
+          {% if not day.calendar_checked %}
+          <div class="text-xs text-stone-400 dark:text-stone-500 italic">Calendar not checked this far out</div>
+          {% endif %}
+        </div>
+
+        {% if day.free_slots %}
+        <div class="flex flex-wrap gap-1.5">
+          {% for slot_start, slot_end in day.free_slots %}
+          <span class="text-xs px-2 py-1 rounded bg-stone-100 dark:bg-stone-700 text-stone-700 dark:text-stone-200 border border-stone-300 dark:border-stone-600">
+            {{ slot_start.strftime('%H:%M') }}&ndash;{{ slot_end.strftime('%H:%M') }}
+          </span>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-xs text-stone-400 dark:text-stone-500 italic">No free time in the configured day bounds.</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+
+    <div x-show="suggested || loading">
+      <div class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-2">Suggested placements</div>
+      <p x-show="error" x-text="error" class="text-xs text-rust dark:text-rust-light mb-2"></p>
+      <div class="space-y-2">
+        <template x-for="(p, index) in placements" :key="p.item_id + '-' + index">
+          <div class="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-3 py-2.5 text-xs text-stone-900 dark:text-stone-100">
+            <div class="font-medium mb-1" x-text="p.title"></div>
+
+            <template x-if="!p.editing">
+              <div class="text-stone-600 dark:text-stone-300">
+                <span x-text="p.proposed_date"></span> &middot; <span x-text="p.proposed_start"></span>&ndash;<span x-text="p.proposed_end"></span>
+              </div>
+            </template>
+            <template x-if="p.editing">
+              <div class="flex items-center gap-1.5">
+                <span x-text="p.proposed_date"></span>
+                <input type="time" x-model="p.edit_start" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1.5 py-0.5 text-stone-900 dark:text-stone-100">
+                <span>&ndash;</span>
+                <input type="time" x-model="p.edit_end" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1.5 py-0.5 text-stone-900 dark:text-stone-100">
+              </div>
+            </template>
+
+            <div class="text-[11px] text-stone-500 dark:text-stone-400 italic mt-1" x-show="p.estimated_duration">
+              estimated <span x-text="p.duration_minutes"></span> min &mdash; edit if needed
+            </div>
+            <div class="text-[11px] text-amber-700 dark:text-amber-400 italic mt-0.5" x-show="p.low_confidence">
+              Lower confidence &mdash; this day's calendar wasn't checked
+            </div>
+
+            <div class="mt-2 flex gap-2">
+              <template x-if="!p.editing">
+                <button type="button" :disabled="p.saving" @click="accept(index, p.proposed_start, p.proposed_end)"
+                  class="text-xs px-2.5 py-1 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">Accept</button>
+              </template>
+              <template x-if="!p.editing">
+                <button type="button" :disabled="p.saving" @click="p.editing = true"
+                  class="text-xs px-2.5 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 disabled:opacity-50">Adjust time</button>
+              </template>
+              <template x-if="p.editing">
+                <button type="button" :disabled="p.saving" @click="accept(index, p.edit_start, p.edit_end)"
+                  class="text-xs px-2.5 py-1 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">Accept adjusted time</button>
+              </template>
+              <button type="button" :disabled="p.saving" @click="skip(index)"
+                class="text-xs px-2.5 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 disabled:opacity-50">Skip</button>
+            </div>
+          </div>
+        </template>
+      </div>
+      <p x-show="!loading && suggested && placements.length === 0" class="text-xs text-stone-400 dark:text-stone-500 italic">No placements to suggest right now.</p>
+    </div>
+  </div>
+</main>
+
+<script>
+  function suggestSchedule() {
+    return {
+      placements: [],
+      loading: false,
+      suggested: false,
+      error: '',
+      suggest() {
+        this.loading = true;
+        this.error = '';
+        fetch('/schedule/suggest', { method: 'POST' })
+          .then(r => r.json())
+          .then(data => {
+            this.loading = false;
+            this.suggested = true;
+            this.placements = (data.placements || []).map(p => ({
+              ...p,
+              editing: false,
+              saving: false,
+              edit_start: p.proposed_start,
+              edit_end: p.proposed_end,
+            }));
+          })
+          .catch(() => {
+            this.loading = false;
+            this.error = 'Could not reach the server.';
+          });
+      },
+      accept(index, start, end) {
+        const p = this.placements[index];
+        if (p.saving) return;
+        p.saving = true;
+        this.error = '';
+        fetch('/schedule/accept-placement', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            item_id: p.item_id,
+            scheduled_date: p.proposed_date,
+            scheduled_start: start,
+            scheduled_end: end,
+          }),
+        })
+          .then(r => r.json().then(data => ({ ok: r.ok, data })))
+          .then(({ ok, data }) => {
+            if (ok) {
+              this.placements.splice(index, 1);
+            } else {
+              p.saving = false;
+              this.error = data.detail || 'Could not accept that placement.';
+            }
+          })
+          .catch(() => {
+            p.saving = false;
+            this.error = 'Could not reach the server.';
+          });
+      },
+      skip(index) {
+        // Pure client-side removal — no server round-trip, no partial
+        // state saved for a suggestion that's never accepted.
+        this.placements.splice(index, 1);
+      },
+    };
+  }
+</script>
+{% endblock %}

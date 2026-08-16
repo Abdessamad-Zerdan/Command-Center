@@ -1,0 +1,24 @@
+{% extends "setup/_setup_base.html" %}
+{% block title %}Setup — Google account{% endblock %}
+{% block setup_content %}
+<div x-data="{ submitting: false }">
+  <h1 class="font-serif text-2xl text-stone-900 dark:text-stone-100">Google account</h1>
+  <p class="mt-4 text-sm text-stone-600 dark:text-stone-300 leading-relaxed">
+    Connecting Gmail, Calendar, and Tasks happens outside this wizard for
+    now — see the "Connect Google" section in SETUP.md, in the repo you
+    cloned. You can finish setup without it: the brief will show sample
+    data until you connect it, and nothing here is lost once you do.
+  </p>
+  <button
+    type="button"
+    :disabled="submitting"
+    @click="
+      submitting = true;
+      fetch('/setup/step/9', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => { if (data.next_url) window.location.href = data.next_url; });
+    "
+    class="mt-8 text-sm px-5 py-2.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50"
+  >Continue</button>
+</div>
+{% endblock %}
