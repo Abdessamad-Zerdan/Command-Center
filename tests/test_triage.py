@@ -63,10 +63,121 @@ def test_run_dispatches_to_groq(monkeypatch: pytest.MonkeyPatch) -> None:
     assert triage.run([_raw_item()]) == ["groq-result"]
 
 
+def test_run_dispatches_to_auto(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(triage, "TRIAGE_PROVIDER", "auto")
+    monkeypatch.setattr(triage, "_run_auto", lambda items: ["auto-result"])
+    assert triage.run([_raw_item()]) == ["auto-result"]
+
+
 def test_run_raises_on_unknown_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(triage, "TRIAGE_PROVIDER", "carrier-pigeon")
     with pytest.raises(ValueError, match="Unknown TRIAGE_PROVIDER"):
         triage.run([_raw_item()])
+
+
+# --- TRIAGE_PROVIDER=auto: prefer local Ollama, fall back to Groq -----------
+
+
+class _FakeHttpxResponse:
+    def __init__(self, payload: dict, status_error: Exception | None = None) -> None:
+        self._payload = payload
+        self._status_error = status_error
+
+    def raise_for_status(self) -> None:
+        if self._status_error:
+            raise self._status_error
+
+    def json(self) -> dict:
+        return self._payload
+
+
+def test_ollama_has_model_true_when_the_exact_tag_is_pulled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        triage.httpx,
+        "get",
+        lambda url, timeout: _FakeHttpxResponse(
+            {"models": [{"name": "llama3.1:8b-instruct-q4_K_M"}, {"name": "llama3.2:3b"}]}
+        ),
+    )
+    assert triage._ollama_has_model("llama3.2:3b") is True
+
+
+def test_ollama_has_model_false_when_a_different_tag_is_pulled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        triage.httpx,
+        "get",
+        lambda url, timeout: _FakeHttpxResponse({"models": [{"name": "llama3.1:8b-instruct-q4_K_M"}]}),
+    )
+    assert triage._ollama_has_model("llama3.2:3b") is False
+
+
+def test_ollama_has_model_false_when_nothing_pulled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(triage.httpx, "get", lambda url, timeout: _FakeHttpxResponse({"models": []}))
+    assert triage._ollama_has_model("llama3.2:3b") is False
+
+
+def test_ollama_has_model_false_when_ollama_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(url, timeout):
+        raise triage.httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(triage.httpx, "get", _raise)
+    assert triage._ollama_has_model("llama3.2:3b") is False
+
+
+def test_run_auto_uses_ollama_when_the_default_model_is_pulled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(triage, "OLLAMA_MODEL", None)
+    monkeypatch.setattr(triage, "_ollama_has_model", lambda model: model == "llama3.2:3b")
+    captured = {}
+
+    def _fake_run_ollama(items, model=None):
+        captured["model"] = model
+        return ["ollama-result"]
+
+    monkeypatch.setattr(triage, "_run_ollama", _fake_run_ollama)
+    monkeypatch.setattr(
+        triage, "_run_groq", lambda items: (_ for _ in ()).throw(AssertionError("should not call Groq"))
+    )
+
+    assert triage._run_auto([_raw_item()]) == ["ollama-result"]
+    assert captured["model"] == "llama3.2:3b"
+
+
+def test_run_auto_checks_the_pinned_ollama_model_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(triage, "OLLAMA_MODEL", "pinned-model")
+    checked = []
+    monkeypatch.setattr(triage, "_ollama_has_model", lambda model: checked.append(model) or True)
+    monkeypatch.setattr(triage, "_run_ollama", lambda items, model=None: ["ollama-result"])
+
+    assert triage._run_auto([_raw_item()]) == ["ollama-result"]
+    assert checked == ["pinned-model"]
+
+
+def test_run_auto_falls_back_to_groq_when_default_model_is_not_pulled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(triage, "OLLAMA_MODEL", None)
+    monkeypatch.setattr(triage, "_ollama_has_model", lambda model: False)
+    monkeypatch.setattr(
+        triage,
+        "_run_ollama",
+        lambda items, model=None: (_ for _ in ()).throw(AssertionError("should not call Ollama")),
+    )
+    monkeypatch.setattr(triage, "_run_groq", lambda items: ["groq-result"])
+
+    assert triage._run_auto([_raw_item()]) == ["groq-result"]
+
+
+def test_run_auto_falls_back_to_groq_when_ollama_call_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(triage, "OLLAMA_MODEL", None)
+    monkeypatch.setattr(triage, "_ollama_has_model", lambda model: True)
+
+    def _fail(items, model=None):
+        raise triage.TriageProviderError("Ollama request failed (connection refused).")
+
+    monkeypatch.setattr(triage, "_run_ollama", _fail)
+    monkeypatch.setattr(triage, "_run_groq", lambda items: ["groq-result"])
+
+    assert triage._run_auto([_raw_item()]) == ["groq-result"]
 
 
 def test_map_results_maps_valid_entry() -> None:

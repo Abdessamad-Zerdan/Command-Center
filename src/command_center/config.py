@@ -82,6 +82,16 @@ GOOGLE_SCOPES = (
 TRIAGE_PROVIDER = os.environ.get("TRIAGE_PROVIDER", "ollama")
 TRIAGE_MODEL = os.environ.get("TRIAGE_MODEL", "llama3.2:3b")
 
+# Only used by TRIAGE_PROVIDER=auto's local leg — kept separate from
+# TRIAGE_MODEL since that one's meant for whatever cloud provider auto
+# falls back to (Groq), and the two use unrelated model-name formats.
+# Deliberately no hardcoded default: which models are actually pulled
+# varies per machine, so a guessed tag would just waste a failed call
+# before falling back to Groq anyway. Leave unset and triage.py asks
+# Ollama's own API what's installed instead; set this only to pin one
+# specific model when more than one is pulled locally.
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL")
+
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 

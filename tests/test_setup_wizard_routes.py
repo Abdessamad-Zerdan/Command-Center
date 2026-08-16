@@ -23,6 +23,12 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(auth, "has_valid_credentials", lambda: False)
     monkeypatch.setattr(config, "GROQ_API_KEY", None)
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", None)
+    # "groq" with no key, not "ollama"/"auto" — those need no key at all
+    # (see status.py), so leaving this unpatched would make
+    # is_setup_complete() depend on whatever TRIAGE_PROVIDER the real
+    # .env on this machine happens to have set, instead of the "nothing
+    # configured yet" state this fixture is meant to represent.
+    monkeypatch.setattr(config, "TRIAGE_PROVIDER", "groq")
     monkeypatch.setattr(config, "GOOGLE_CLIENT_ID", None)
     monkeypatch.setattr(config, "GOOGLE_CLIENT_SECRET", None)
     monkeypatch.setattr(config, "GOOGLE_CREDENTIALS_PATH", tmp_path / "no_credentials.json")
