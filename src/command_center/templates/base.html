@@ -55,6 +55,61 @@
       },
     });
   });
+
+  // Cmd/Ctrl+K anywhere on the site opens this — a static route list,
+  // filtered client-side, no server round-trip. Registered on the
+  // window so it fires regardless of which element currently has
+  // focus, same reasoning as the nav rail's own window-level Escape
+  // handler.
+  function commandPalette() {
+    return {
+      open: false,
+      query: '',
+      active: 0,
+      items: [
+        { label: 'Brief', href: '/brief' },
+        { label: 'Projects', href: '/projects' },
+        { label: 'Schedule', href: '/schedule' },
+        { label: 'History', href: '/history' },
+        { label: 'Report', href: '/history/report' },
+        { label: 'Finances', href: '/finances' },
+        { label: 'Settings', href: '/settings' },
+        { label: 'Settings — Invites', href: '/settings/invites' },
+        { label: 'Settings — Recurring schedule', href: '/settings/schedule' },
+        { label: 'Settings — Activity', href: '/settings/activity' },
+        { label: 'Portfolio', href: '/' },
+      ],
+      get filtered() {
+        const q = this.query.trim().toLowerCase();
+        if (!q) return this.items;
+        return this.items.filter((i) => i.label.toLowerCase().includes(q));
+      },
+      onKeydown(e) {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+          e.preventDefault();
+          this.open ? this.close() : this.launch();
+        }
+      },
+      launch() {
+        this.open = true;
+        this.query = '';
+        this.active = 0;
+        this.$nextTick(() => this.$refs.paletteInput.focus());
+      },
+      close() {
+        this.open = false;
+      },
+      move(delta) {
+        const n = this.filtered.length;
+        if (!n) return;
+        this.active = ((this.active + delta) % n + n) % n;
+      },
+      go() {
+        const item = this.filtered[this.active];
+        if (item) window.location.href = item.href;
+      },
+    };
+  }
 </script>
 <style>
   ::-webkit-scrollbar { height: 8px; width: 8px; }
@@ -62,6 +117,7 @@
   ::-webkit-scrollbar-thumb { background: #d6d3d1; border-radius: 9999px; }
   .dark ::-webkit-scrollbar-thumb { background: #44403c; }
   html.tooltips-disabled .icon-tooltip { display: none !important; }
+  [x-cloak] { display: none !important; }
 
   /* Nav rail: click/tap to open on every device, stays open until the
      trigger is clicked again or the user clicks outside — no hover
@@ -178,6 +234,45 @@
     @click="$store.toast.runUndo()"
     class="font-medium underline hover:no-underline"
   >Undo</button>
+</div>
+
+<div x-data="commandPalette()" @keydown.window="onKeydown($event)">
+  <div
+    x-show="open"
+    x-cloak
+    @keydown.escape.window="close()"
+    @click.self="close()"
+    class="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/40 dark:bg-black/60"
+  >
+    <div class="w-full max-w-md mx-4 rounded-lg bg-white dark:bg-stone-800 shadow-2xl border border-stone-200 dark:border-stone-700 overflow-hidden">
+      <input
+        x-ref="paletteInput"
+        x-model="query"
+        @input="active = 0"
+        @keydown.arrow-down.prevent="move(1)"
+        @keydown.arrow-up.prevent="move(-1)"
+        @keydown.enter.prevent="go()"
+        type="text"
+        placeholder="Jump to..."
+        class="w-full px-4 py-3 text-sm bg-transparent text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none border-b border-stone-200 dark:border-stone-700"
+      >
+      <div class="max-h-80 overflow-y-auto py-1">
+        <template x-for="(item, i) in filtered" :key="item.href">
+          <a
+            :href="item.href"
+            @click="close()"
+            @mouseenter="active = i"
+            :class="active === i ? 'bg-stone-100 dark:bg-stone-700' : ''"
+            class="block px-4 py-2 text-sm text-stone-700 dark:text-stone-300"
+            x-text="item.label"
+          ></a>
+        </template>
+        <template x-if="filtered.length === 0">
+          <div class="px-4 py-3 text-xs text-stone-400 dark:text-stone-500 italic">No matches</div>
+        </template>
+      </div>
+    </div>
+  </div>
 </div>
 </body>
 </html>
