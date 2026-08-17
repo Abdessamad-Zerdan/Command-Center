@@ -155,6 +155,41 @@ def test_todays_brief_does_not_show_bring_to_today_button(client: TestClient) ->
     assert "Bring to today" not in response.text
 
 
+def test_lanes_partial_returns_html_and_lane_counts_for_today(client: TestClient) -> None:
+    response = client.get("/brief/lanes-partial")
+    assert response.status_code == 200
+    data = response.json()
+    assert "Production alert: payment webhook failing" in data["html"]
+    assert 'id="lanes-container"' in data["html"]
+    assert isinstance(data["lane_counts"], dict)
+    assert "urgent" in data["lane_counts"]
+
+
+def test_lanes_partial_reflects_a_just_created_item(client: TestClient) -> None:
+    today = datetime.now(TZ).date().isoformat()
+    queries.create_manual_item(today, "urgent", "Brand new task")
+
+    response = client.get("/brief/lanes-partial")
+
+    assert "Brand new task" in response.json()["html"]
+
+
+def test_lanes_partial_for_a_specific_past_date(client: TestClient) -> None:
+    _seed_past_item("2026-08-10", "action_items", "Old task from history")
+
+    response = client.get("/brief/lanes-partial?date=2026-08-10")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "Old task from history" in data["html"]
+    assert "Bring to today" in data["html"]  # is_history=True for a non-today date
+
+
+def test_lanes_partial_404s_for_a_date_with_no_brief(client: TestClient) -> None:
+    response = client.get("/brief/lanes-partial?date=2020-01-01")
+    assert response.status_code == 404
+
+
 def test_history_lists_today(client: TestClient) -> None:
     response = client.get("/history")
     assert response.status_code == 200

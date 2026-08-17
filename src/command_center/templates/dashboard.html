@@ -152,90 +152,7 @@
   </div>
 </section>
 
-<main class="px-4 sm:px-6 pb-10">
-  <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
-    {% for lane in lanes_order %}
-    <div
-      {% if not is_history %}
-      x-data="{ dragOver: false }"
-      @dragover.prevent="dragOver = true"
-      @dragleave="dragOver = false"
-      @drop.prevent="
-        dragOver = false;
-        const itemId = $event.dataTransfer.getData('text/plain');
-        if (!itemId) return;
-        fetch(`/items/${itemId}/lane`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lane: '{{ lane }}' }),
-        }).then(r => { if (r.ok) window.location.reload(); });
-      "
-      :class="dragOver ? 'ring-2 ring-rust dark:ring-rust-light bg-rust/5 dark:bg-rust-light/5' : ''"
-      {% endif %}
-      class="rounded-lg p-1.5 -m-1.5 transition-colors"
-    >
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">{{ lane_labels[lane] }}</h2>
-        <span class="text-xs text-stone-400 dark:text-stone-500" x-data x-text="$store.counts['{{ lane }}']"></span>
-      </div>
-      {% if brief.lanes[lane] %}
-        {% set priorities_in_lane = brief.lanes[lane] | map(attribute='priority') | unique | list %}
-        {% for priority, group_items in brief.lanes[lane] | groupby('priority') %}
-        {% if priorities_in_lane | length > 1 %}
-        <div class="text-[10px] uppercase tracking-wide text-stone-400 dark:text-stone-500 mt-3 mb-1 first:mt-0">
-          {% if priority == 1 %}High priority{% elif priority == 2 %}Medium priority{% else %}Low priority{% endif %}
-        </div>
-        {% endif %}
-        {% for item in group_items %}
-          {% include "partials/item_card.html" %}
-        {% endfor %}
-        {% endfor %}
-      {% else %}
-        <p class="text-xs text-stone-400 dark:text-stone-500 italic">Nothing here.</p>
-      {% endif %}
-      {% if not is_history %}
-      <div class="mt-1" x-data="{ adding: false, title: '', dueDate: '' }">
-        <button
-          type="button"
-          x-show="!adding"
-          @click="adding = true; $nextTick(() => $refs.newTaskInput.focus())"
-          class="text-xs text-stone-400 dark:text-stone-500 hover:text-rust dark:hover:text-rust-light"
-        >+ Add task</button>
-        <form
-          x-show="adding"
-          @submit.prevent="
-            if (!title.trim()) return;
-            const body = { lane: '{{ lane }}', title: title.trim() };
-            if (dueDate) body.due_date = dueDate;
-            fetch('/items', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(body),
-            }).then(r => { if (r.ok) window.location.reload(); });
-          "
-          class="flex gap-1"
-        >
-          <input
-            type="text"
-            x-model="title"
-            x-ref="newTaskInput"
-            placeholder="Task title..."
-            @keydown.escape="adding = false; title = ''; dueDate = ''"
-            class="min-w-0 flex-1 text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light"
-          >
-          <input
-            type="date"
-            x-model="dueDate"
-            class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1.5 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"
-          >
-          <button type="submit" class="text-xs px-2 py-1 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white shrink-0">Add</button>
-        </form>
-      </div>
-      {% endif %}
-    </div>
-    {% endfor %}
-  </div>
-</main>
+{% include "partials/lanes.html" %}
 
 <div x-data="itemModal()" @item-modal-open.window="onOpen($event.detail)">
 <template x-if="item">
@@ -505,6 +422,24 @@
             this.error = 'Could not reach the assistant.';
           });
       },
+      refreshLanes() {
+        // Re-renders just the lane grid for the page currently being
+        // viewed — a chat-driven create/update/complete/move already
+        // succeeded server-side by the time this runs, but this page's
+        // own server-rendered lane HTML was built at initial load and
+        // has no other way to catch up. Failure here is silent/logged
+        // only — the mutation itself already succeeded either way, the
+        // user just won't see it reflected until their next reload.
+        fetch('/brief/lanes-partial?date={{ brief.brief_date }}')
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (!data) return;
+            const container = document.getElementById('lanes-container');
+            if (container) container.outerHTML = data.html;
+            Object.assign(Alpine.store('counts'), data.lane_counts);
+          })
+          .catch(() => {});
+      },
       resolvePending(index, confirmed) {
         if (this.resolving) return;
         this.resolving = true;
@@ -526,6 +461,7 @@
             this.resolving = false;
             this.messages.splice(index, 1, { role: 'assistant', text: data.answer, sources: [] });
             this.scrollToBottom();
+            if (confirmed) this.refreshLanes();
           })
           .catch(() => {
             this.resolving = false;
@@ -558,6 +494,7 @@
             this.resolving = false;
             this.messages.splice(index, 1, { role: 'assistant', text: data.answer, sources: [] });
             this.scrollToBottom();
+            if (confirmed) this.refreshLanes();
           })
           .catch(() => {
             this.resolving = false;

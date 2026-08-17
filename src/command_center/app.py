@@ -6,7 +6,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -232,6 +232,32 @@ def history_detail(request: Request, brief_date: str):
             "active_projects": queries.list_registered_projects(active_only=True),
         },
     )
+
+
+@app.get("/brief/lanes-partial")
+def lanes_partial(request: Request, date: str | None = None):
+    """Re-renders just the lane grid for `date` (defaults to today) as
+    {html, lane_counts} JSON — lets the assistant widget catch up the
+    currently-viewed page after a chat-driven create/update/complete/
+    move without a full reload, which would otherwise drop the visible
+    conversation (never persisted past the tab's memory in the first
+    place). Every other in-page mutation (drag-drop, inline add, title
+    edit) still just reloads — this route exists specifically for the
+    chat path, where preserving the conversation actually matters.
+    """
+    brief_date = date or _today()
+    brief = queries.get_brief(brief_date)
+    if brief is None:
+        raise HTTPException(status_code=404, detail="No brief for that date")
+
+    html = templates.env.get_template("partials/lanes.html").render(
+        request=request,
+        brief=brief,
+        lane_labels=LANE_LABELS,
+        lanes_order=LANES,
+        is_history=brief_date != _today(),
+    )
+    return JSONResponse({"html": html, "lane_counts": _lane_counts(brief["lanes"])})
 
 
 @app.post("/items/{item_id}/done")
