@@ -430,6 +430,18 @@ def update_item_project(item_id: int, payload: ItemProjectIn):
     return {"ok": True}
 
 
+class ItemReorderIn(BaseModel):
+    after_item_id: int | None = None
+
+
+@app.patch("/items/{item_id}/reorder")
+def reorder_item(item_id: int, payload: ItemReorderIn):
+    reordered = queries.reorder_item(item_id, payload.after_item_id)
+    if not reordered:
+        raise HTTPException(status_code=404, detail="Item not found, or after_item_id isn't a sibling")
+    return {"ok": True}
+
+
 @app.delete("/pomodoro/sessions/{session_id}")
 def delete_pomodoro_session(session_id: int):
     deleted = queries.delete_pomodoro_session(session_id)

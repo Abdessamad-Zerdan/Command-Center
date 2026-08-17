@@ -54,7 +54,7 @@ def get_brief(brief_date: str) -> dict[str, Any] | None:
 
         rows = conn.execute(
             "SELECT * FROM items WHERE brief_date = ? AND status = 'pending' "
-            "ORDER BY priority ASC, id ASC",
+            "ORDER BY priority ASC, sort_order ASC, id ASC",
             (brief_date,),
         ).fetchall()
 
@@ -528,6 +528,61 @@ def update_item_lane(item_id: int, lane: str) -> bool:
                 conn=conn,
             )
         return updated
+
+
+def reorder_item(item_id: int, after_item_id: int | None) -> bool:
+    """Moves item_id to sit immediately after after_item_id (or first in
+    its group, if after_item_id is None) among the *other pending items
+    sharing its lane, priority band, and brief_date* — scoped that way
+    so a drag never silently jumps an item across the High/Medium/Low
+    priority sub-headers the UI already groups by. Returns False if
+    item_id doesn't exist, or after_item_id isn't actually a sibling
+    (e.g. it's in a different priority band) — a no-op, not an error,
+    since a stale drag target is the only realistic way to hit this.
+
+    Re-spaces every sibling to clean, evenly-spaced values (in their
+    current, already-correct display order) before computing the new
+    item's midpoint. Cheap for a lane-sized group, and it's what makes
+    the midpoint always well-defined — every row shares the same
+    sort_order=0 default until the first-ever reorder in a group, so a
+    naive midpoint between two still-equal values wouldn't move
+    anything; re-spacing first guarantees the two neighbors are never
+    equal.
+    """
+    with session() as conn:
+        item = conn.execute(
+            "SELECT lane, priority, brief_date FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if item is None:
+            return False
+
+        siblings = conn.execute(
+            "SELECT id FROM items "
+            "WHERE lane = ? AND priority = ? AND brief_date = ? AND status = 'pending' AND id != ? "
+            "ORDER BY sort_order ASC, id ASC",
+            (item["lane"], item["priority"], item["brief_date"], item_id),
+        ).fetchall()
+
+        if after_item_id is not None and not any(s["id"] == after_item_id for s in siblings):
+            return False
+
+        spaced = []
+        for i, sibling in enumerate(siblings):
+            new_val = float(i * 10)
+            conn.execute("UPDATE items SET sort_order = ? WHERE id = ?", (new_val, sibling["id"]))
+            spaced.append({"id": sibling["id"], "sort_order": new_val})
+
+        if after_item_id is None:
+            next_order = spaced[0]["sort_order"] if spaced else 0.0
+            new_order = next_order - 10.0
+        else:
+            idx = next(i for i, s in enumerate(spaced) if s["id"] == after_item_id)
+            after_order = spaced[idx]["sort_order"]
+            next_order = spaced[idx + 1]["sort_order"] if idx + 1 < len(spaced) else after_order + 20.0
+            new_order = (after_order + next_order) / 2.0
+
+        conn.execute("UPDATE items SET sort_order = ? WHERE id = ?", (new_order, item_id))
+        return True
 
 
 def update_item_project(item_id: int, project_id: int | None) -> bool:

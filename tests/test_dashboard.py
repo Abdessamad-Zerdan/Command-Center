@@ -198,6 +198,34 @@ def test_toast_component_renders_on_every_page(client: TestClient) -> None:
     assert "$store.toast" in response.text
 
 
+# --- within-lane reordering ------------------------------------------------
+
+
+def test_reorder_route_moves_item_after_a_sibling(client: TestClient) -> None:
+    today = datetime.now(TZ).date().isoformat()
+    a = queries.create_manual_item(today, "action_items", "A")
+    b = queries.create_manual_item(today, "action_items", "B")
+    c = queries.create_manual_item(today, "action_items", "C")
+
+    response = client.patch(f"/items/{c}/reorder", json={"after_item_id": a})
+
+    assert response.status_code == 200
+    brief = queries.get_brief(today)
+    ids = [item["id"] for item in brief["lanes"]["action_items"] if item["id"] in (a, b, c)]
+    assert ids == [a, c, b]
+
+
+def test_reorder_route_404s_for_unknown_item(client: TestClient) -> None:
+    response = client.patch("/items/999999/reorder", json={"after_item_id": None})
+    assert response.status_code == 404
+
+
+def test_item_card_wires_up_reorder_drop_handler(client: TestClient) -> None:
+    response = client.get("/brief")
+    assert "/reorder" in response.text
+    assert "after_item_id" in response.text
+
+
 def test_history_item_card_shows_bring_to_today_button(client: TestClient) -> None:
     _seed_past_item("2026-08-10", "action_items", "Old task from history")
     response = client.get("/history/2026-08-10")

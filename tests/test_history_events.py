@@ -124,6 +124,77 @@ def test_list_task_events_returns_newest_first(isolated_db: None) -> None:
     assert [r["event_type"] for r in rows] == ["completed", "snoozed"]
 
 
+# --- reorder_item -----------------------------------------------------------
+
+
+def test_reorder_item_places_after_a_sibling(isolated_db: None) -> None:
+    a = _seed_item("2026-08-14", "action_items", "gmail", "a", "A")
+    b = _seed_item("2026-08-14", "action_items", "gmail", "b", "B")
+    c = _seed_item("2026-08-14", "action_items", "gmail", "c", "C")
+
+    # Default order (all sort_order=0, tie-broken by id): A, B, C.
+    # Move C to sit right after A: A, C, B.
+    moved = queries.reorder_item(c, after_item_id=a)
+
+    assert moved is True
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT id FROM items WHERE lane = 'action_items' ORDER BY sort_order ASC, id ASC"
+        ).fetchall()
+    assert [r["id"] for r in rows] == [a, c, b]
+
+
+def test_reorder_item_with_no_after_id_moves_to_the_front(isolated_db: None) -> None:
+    a = _seed_item("2026-08-14", "action_items", "gmail", "a", "A")
+    b = _seed_item("2026-08-14", "action_items", "gmail", "b", "B")
+
+    moved = queries.reorder_item(b, after_item_id=None)
+
+    assert moved is True
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT id FROM items WHERE lane = 'action_items' ORDER BY sort_order ASC, id ASC"
+        ).fetchall()
+    assert [r["id"] for r in rows] == [b, a]
+
+
+def test_reorder_item_scoped_to_same_priority_band(isolated_db: None) -> None:
+    # _seed_item's default priority is 2 for all three — bump one to
+    # priority 1 directly so it's in a different band.
+    a = _seed_item("2026-08-14", "action_items", "gmail", "a", "A")
+    b = _seed_item("2026-08-14", "action_items", "gmail", "b", "B")
+    with db.session() as conn:
+        conn.execute("UPDATE items SET priority = 1 WHERE id = ?", (a,))
+
+    moved = queries.reorder_item(b, after_item_id=a)
+
+    assert moved is False  # a isn't a sibling of b anymore — different priority band
+
+
+def test_reorder_item_returns_false_for_unknown_item(isolated_db: None) -> None:
+    assert queries.reorder_item(99999, after_item_id=None) is False
+
+
+def test_reorder_item_returns_false_for_unknown_after_item_id(isolated_db: None) -> None:
+    a = _seed_item("2026-08-14", "action_items", "gmail", "a", "A")
+    assert queries.reorder_item(a, after_item_id=99999) is False
+
+
+def test_reorder_item_handles_repeated_reorders_correctly(isolated_db: None) -> None:
+    a = _seed_item("2026-08-14", "action_items", "gmail", "a", "A")
+    b = _seed_item("2026-08-14", "action_items", "gmail", "b", "B")
+    c = _seed_item("2026-08-14", "action_items", "gmail", "c", "C")
+
+    queries.reorder_item(c, after_item_id=a)  # A, C, B
+    queries.reorder_item(a, after_item_id=b)  # C, B, A
+
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT id FROM items WHERE lane = 'action_items' ORDER BY sort_order ASC, id ASC"
+        ).fetchall()
+    assert [r["id"] for r in rows] == [c, b, a]
+
+
 # --- create_synced_task_item ---------------------------------------------
 
 

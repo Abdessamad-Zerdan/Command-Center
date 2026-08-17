@@ -1,12 +1,25 @@
 <article
-  x-data="{ removed: false }"
+  x-data="{ removed: false, dragOverCard: false }"
   x-show="!removed"
   x-transition.duration.200ms
   {% if not is_history %}
   draggable="true"
   @dragstart="$event.dataTransfer.setData('text/plain', '{{ item.id }}'); $event.dataTransfer.effectAllowed = 'move'"
+  @dragover.prevent.stop="dragOverCard = true"
+  @dragleave="dragOverCard = false"
+  @drop.prevent.stop="
+    dragOverCard = false;
+    const draggedId = $event.dataTransfer.getData('text/plain');
+    if (!draggedId || draggedId === '{{ item.id }}') return;
+    fetch(`/items/${draggedId}/reorder`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ after_item_id: {{ item.id }} }),
+    }).then(r => { if (r.ok) window.location.reload(); });
+  "
   {% endif %}
   @click='$dispatch("item-modal-open", {{ item | tojson }})'
+  :class="dragOverCard ? 'ring-2 ring-rust dark:ring-rust-light' : ''"
   class="mb-2 {{ '' if full_height else 'max-h-[180px] overflow-y-auto' }} rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-3 py-3 cursor-pointer hover:border-stone-300 dark:hover:border-stone-600 {% if not is_history %}active:cursor-grabbing{% endif %} {% if item.priority == 1 %}border-l-2 border-l-rust dark:border-l-rust-light{% endif %}"
 >
   <div class="flex items-start justify-between gap-2">
