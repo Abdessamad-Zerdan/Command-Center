@@ -21,7 +21,8 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from command_center.config import LANE_LABELS, LANES
+from command_center import queries
+from command_center.config import LANES
 from command_center.history import aggregations, charts, periods, reflection
 from command_center.triage import TriageProviderError
 
@@ -89,7 +90,7 @@ def history_report(request: Request, period: str = "week", date: str | None = No
             "same_day_resolution_rate": same_day,
             "avg_time_to_complete": avg_time,
             "rollover_count": rollover,
-            "lane_labels": LANE_LABELS,
+            "lane_labels": queries.get_lane_labels(),
             "lanes_order": LANES,
             "trend_svg": charts.render_trend_svg(trend),
             "bars_svg": charts.render_lane_bars_svg(completion),

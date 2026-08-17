@@ -1,6 +1,19 @@
 from datetime import date
+from pathlib import Path
 
+import pytest
+
+from command_center import db
 from command_center.history import reflection
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # _format_period_block reads queries.get_lane_labels() (renamed lanes
+    # since Settings > Lane labels) — needs an isolated DB, not whatever
+    # command_center.db happens to be on the machine running these tests.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    db.init_db()
 
 
 def _completion(by_lane: dict) -> dict:

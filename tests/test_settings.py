@@ -197,6 +197,45 @@ def test_delete_triage_rule_route_404s_for_unknown_id(client: TestClient) -> Non
     assert response.status_code == 404
 
 
+def test_settings_page_links_to_lane_labels(client: TestClient) -> None:
+    response = client.get("/settings")
+    assert 'href="/settings/lane-labels"' in response.text
+
+
+def test_lane_labels_page_shows_current_labels(client: TestClient) -> None:
+    response = client.get("/settings/lane-labels")
+    assert response.status_code == 200
+    assert "urgent" in response.text
+
+
+def test_update_lane_label_route(client: TestClient) -> None:
+    response = client.post("/settings/lane-labels/urgent", json={"label": "Fires"})
+    assert response.status_code == 200
+    assert response.json()["label"] == "Fires"
+    assert queries.get_lane_labels()["urgent"] == "Fires"
+
+
+def test_update_lane_label_route_rejects_unknown_lane(client: TestClient) -> None:
+    response = client.post("/settings/lane-labels/not_a_lane", json={"label": "X"})
+    assert response.status_code == 404
+
+
+def test_update_lane_label_route_blank_resets_to_default(client: TestClient) -> None:
+    client.post("/settings/lane-labels/urgent", json={"label": "Fires"})
+    response = client.post("/settings/lane-labels/urgent", json={"label": ""})
+
+    assert response.status_code == 200
+    from command_center.config import LANE_LABELS
+
+    assert response.json()["label"] == LANE_LABELS["urgent"]
+
+
+def test_a_renamed_lane_label_shows_on_the_brief(client: TestClient) -> None:
+    client.post("/settings/lane-labels/urgent", json={"label": "Fires"})
+    response = client.get("/brief")
+    assert "Fires" in response.text
+
+
 def test_triage_rules_page_shows_no_corrections_empty_state(client: TestClient) -> None:
     response = client.get("/settings/triage-rules")
     assert "No corrections yet" in response.text

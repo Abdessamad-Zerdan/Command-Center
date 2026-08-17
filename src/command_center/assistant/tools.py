@@ -9,7 +9,7 @@ it's actually needed).
 from datetime import datetime
 
 from command_center import queries
-from command_center.config import LANE_LABELS, LANES
+from command_center.config import LANES
 from command_center.sources import tasks as tasks_module
 
 DEFAULT_TASKLIST_ID = "@default"
@@ -382,8 +382,9 @@ def _lane_and_project_clause(args: dict, project_lookup: dict[int, str] | None) 
     inferred beyond it."""
     parts = []
     lane = args.get("lane")
-    if lane in LANE_LABELS:
-        parts.append(f"{LANE_LABELS[lane]} lane")
+    lane_labels = queries.get_lane_labels()
+    if lane in lane_labels:
+        parts.append(f"{lane_labels[lane]} lane")
     project_id = coerce_project_id(args.get("project_id"))
     if project_lookup and project_id in project_lookup:
         parts.append(f"related to {project_lookup[project_id]}")
@@ -422,7 +423,8 @@ def describe_pending(
     if name == "move_task_to_date":
         title = title_lookup.get(args.get("item_id")) or f"item {args.get('item_id')}"
         target = _format_due_date(args.get("target_date")) or args.get("target_date")
-        lane_clause = f" to {LANE_LABELS[args['lane']]}" if args.get("lane") in LANE_LABELS else ""
+        lane_labels = queries.get_lane_labels()
+        lane_clause = f" to {lane_labels[args['lane']]}" if args.get("lane") in lane_labels else ""
         return f"Move '{title}' to {target}{lane_clause}?"
 
     return "Make this change?"

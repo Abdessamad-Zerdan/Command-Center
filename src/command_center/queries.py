@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from command_center.config import LANES, TZ
+from command_center.config import LANE_LABELS, LANES, TZ
 from command_center.db import session
 
 # No caller passes "pending" to set_item_status today (no reopen/un-snooze
@@ -826,6 +826,43 @@ def get_day_bounds() -> tuple[str, str]:
         values.get("day_bounds_start", _DEFAULT_APP_SETTINGS["day_bounds_start"]),
         values.get("day_bounds_end", _DEFAULT_APP_SETTINGS["day_bounds_end"]),
     )
+
+
+def get_lane_labels() -> dict[str, str]:
+    """config.LANE_LABELS (from profile.py) as the default, overlaid with
+    any per-lane renames saved via /settings/lane-labels. Renaming a
+    lane's *display text* never touches the lane slugs themselves
+    (config.LANES) — triage, the DB `lane` column, and chat tool schemas
+    all keep using urgent/action_items/etc. regardless."""
+    labels = dict(LANE_LABELS)
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM app_settings WHERE key LIKE 'lane_label_%'"
+        ).fetchall()
+    for row in rows:
+        lane = row["key"].removeprefix("lane_label_")
+        if lane in labels:
+            labels[lane] = row["value"]
+    return labels
+
+
+def set_lane_label(lane: str, label: str) -> bool:
+    """Blank `label` clears the override, reverting to config.LANE_LABELS'
+    default rather than saving an empty string. Returns False for an
+    unknown lane."""
+    if lane not in LANES:
+        return False
+    key = f"lane_label_{lane}"
+    with session() as conn:
+        if not label.strip():
+            conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        else:
+            conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, label.strip()),
+            )
+    return True
 
 
 def set_day_bounds(start: str, end: str) -> None:
