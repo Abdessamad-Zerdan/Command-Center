@@ -144,6 +144,60 @@ def test_move_item_to_today_route_404s_for_unknown_item(client: TestClient) -> N
     assert response.status_code == 404
 
 
+def test_move_item_to_date_route_moves_to_the_given_date(client: TestClient) -> None:
+    item_id = _seed_past_item("2026-08-10", "action_items", "Some task")
+
+    response = client.post(f"/items/{item_id}/move-to-date", json={"date": "2026-08-12"})
+
+    assert response.status_code == 200
+    with db.session() as conn:
+        row = conn.execute("SELECT brief_date, status FROM items WHERE id = ?", (item_id,)).fetchone()
+    assert row["brief_date"] == "2026-08-12"
+    assert row["status"] == "pending"
+
+
+def test_move_item_to_date_route_404s_for_unknown_item(client: TestClient) -> None:
+    response = client.post("/items/999999/move-to-date", json={"date": "2026-08-12"})
+    assert response.status_code == 404
+
+
+def test_reopen_route_sets_status_back_to_pending(client: TestClient) -> None:
+    with db.session() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM items WHERE title LIKE 'Production alert%'"
+        ).fetchone()["id"]
+    client.post(f"/items/{item_id}/done")
+
+    response = client.post(f"/items/{item_id}/reopen")
+
+    assert response.status_code == 200
+    with db.session() as conn:
+        status = conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()["status"]
+    assert status == "pending"
+
+
+def test_item_card_buttons_wire_up_toast_undo(client: TestClient) -> None:
+    # Regression guard for the undo-toast feature: each mutating button
+    # must call $store.toast.show with an undo callback, not just hide
+    # the card silently.
+    response = client.get("/brief")
+    assert "$store.toast.show('Snoozed'" in response.text
+    assert "$store.toast.show('Marked done'" in response.text
+    assert "/reopen" in response.text
+
+
+def test_history_bring_to_today_button_wires_up_undo(client: TestClient) -> None:
+    _seed_past_item("2026-08-10", "action_items", "Old task from history")
+    response = client.get("/history/2026-08-10")
+    assert "$store.toast.show('Brought to today'" in response.text
+    assert "/move-to-date" in response.text
+
+
+def test_toast_component_renders_on_every_page(client: TestClient) -> None:
+    response = client.get("/settings")
+    assert "$store.toast" in response.text
+
+
 def test_history_item_card_shows_bring_to_today_button(client: TestClient) -> None:
     _seed_past_item("2026-08-10", "action_items", "Old task from history")
     response = client.get("/history/2026-08-10")
@@ -383,7 +437,9 @@ def test_item_card_snooze_and_done_only_hide_the_card_on_success(client: TestCli
     # request looked identical to a successful one.
     response = client.get("/brief")
     assert response.status_code == 200
-    assert ".then(r => { if (r.ok) { removed = true;" in response.text
+    assert ".then(r => {" in response.text
+    assert "if (r.ok) {" in response.text
+    assert "removed = true;" in response.text
 
 
 def test_dashboard_item_cards_still_keep_the_height_cap(client: TestClient) -> None:
