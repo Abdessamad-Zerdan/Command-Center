@@ -511,9 +511,17 @@ def update_item_title(item_id: int, title: str) -> bool:
 
 def update_item_lane(item_id: int, lane: str) -> bool:
     """Drag-and-drop recategorization — any item can move lanes, not just
-    manual ones (triage can be wrong). Returns True if a row was updated."""
+    manual ones (triage can be wrong). Returns True if a row was updated.
+
+    A move away from the lane the LLM originally assigned (source is
+    anything but 'manual' — a manual item was never triaged, so moving
+    it isn't a correction) also logs a triage_corrections row, feeding
+    /settings/triage-rules' "recent corrections" panel.
+    """
     with session() as conn:
-        row = conn.execute("SELECT source, title FROM items WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT lane, source, title, brief_date FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
         cursor = conn.execute(
             "UPDATE items SET lane = ? WHERE id = ?",
             (lane, item_id),
@@ -527,7 +535,45 @@ def update_item_lane(item_id: int, lane: str) -> bool:
                 metadata={"lane": lane, "source": row["source"], "title": row["title"]},
                 conn=conn,
             )
+            if row["source"] != "manual" and row["lane"] != lane:
+                conn.execute(
+                    "INSERT INTO triage_corrections "
+                    "(item_id, brief_date, source, title, from_lane, to_lane, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        item_id, row["brief_date"], row["source"], row["title"],
+                        row["lane"], lane, datetime.now(TZ).isoformat(),
+                    ),
+                )
         return updated
+
+
+def list_triage_corrections(limit: int = 20) -> list[dict[str, Any]]:
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM triage_corrections ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def triage_correction_patterns(min_count: int = 2) -> list[dict[str, Any]]:
+    """Groups corrections by (source, from_lane, to_lane) — a repeated
+    pattern (moved the same way `min_count`+ times) is a real signal a
+    triage rule would fix, not a one-off. Ordered by count desc so the
+    strongest pattern surfaces first."""
+    with session() as conn:
+        rows = conn.execute(
+            """
+            SELECT source, from_lane, to_lane, COUNT(*) AS count,
+                   MAX(title) AS example_title
+            FROM triage_corrections
+            GROUP BY source, from_lane, to_lane
+            HAVING COUNT(*) >= ?
+            ORDER BY count DESC
+            """,
+            (min_count,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
 
 def reorder_item(item_id: int, after_item_id: int | None) -> bool:
