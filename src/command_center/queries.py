@@ -576,6 +576,30 @@ def triage_correction_patterns(min_count: int = 2) -> list[dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
+def list_stale_pending_items(lane: str, cutoff_iso: str) -> list[dict[str, Any]]:
+    """Pending items in `lane` created at or before `cutoff_iso` — the
+    dashboard's "stale urgent" nudge uses created_at as the only signal
+    for "hasn't been touched," since nothing else in the schema tracks
+    a last-viewed time."""
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM items WHERE lane = ? AND status = 'pending' AND created_at <= ? "
+            "ORDER BY created_at ASC",
+            (lane, cutoff_iso),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_overdue_tasks(today: str) -> list[dict[str, Any]]:
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM items WHERE lane = 'tasks_due' AND status = 'pending' "
+            "AND due_date IS NOT NULL AND due_date < ? ORDER BY due_date ASC",
+            (today,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def reorder_item(item_id: int, after_item_id: int | None) -> bool:
     """Moves item_id to sit immediately after after_item_id (or first in
     its group, if after_item_id is None) among the *other pending items

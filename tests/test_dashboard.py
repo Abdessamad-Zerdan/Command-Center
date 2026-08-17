@@ -58,6 +58,80 @@ def test_brief_shows_demo_data_banner_for_fixture_seeded_brief(client: TestClien
     assert "Showing sample data" in response.text
 
 
+def test_brief_shows_no_nudges_by_default(client: TestClient) -> None:
+    # Fixture items are seeded with created_at = now and no due_date, so
+    # neither the stale-urgent nor overdue-task nudge should ever fire
+    # against the app's own demo data.
+    response = client.get("/brief")
+    assert "sat in Urgent" not in response.text
+    assert "overdue:" not in response.text
+
+
+def test_brief_shows_a_stale_urgent_nudge(client: TestClient) -> None:
+    from datetime import timedelta
+
+    today = datetime.now(TZ).date().isoformat()
+    old = (datetime.now(TZ) - timedelta(days=3)).isoformat()
+    with db.session() as conn:
+        conn.execute(
+            "INSERT INTO items (brief_date, lane, source, source_id, title, why_it_matters, "
+            "suggested_next_step, priority, deep_link, status, created_at) "
+            "VALUES (?, 'urgent', 'gmail', 'stale-1', 'Ancient fire drill', '', '', 1, '', "
+            "'pending', ?)",
+            (today, old),
+        )
+
+    response = client.get("/brief")
+
+    assert "Ancient fire drill" in response.text
+    assert "sat in Urgent for 2+ days untouched" in response.text
+
+
+def test_brief_shows_an_overdue_task_nudge(client: TestClient) -> None:
+    from datetime import timedelta
+
+    today = datetime.now(TZ).date().isoformat()
+    yesterday = (datetime.now(TZ) - timedelta(days=1)).date().isoformat()
+    with db.session() as conn:
+        conn.execute(
+            "INSERT INTO items (brief_date, lane, source, source_id, title, why_it_matters, "
+            "suggested_next_step, priority, deep_link, due_date, status, created_at) "
+            "VALUES (?, 'tasks_due', 'google_tasks', 'overdue-1', 'Renew the cert', '', '', 1, "
+            "'', ?, 'pending', ?)",
+            (today, yesterday, datetime.now(TZ).isoformat()),
+        )
+
+    response = client.get("/brief")
+
+    assert "Renew the cert" in response.text
+    assert "overdue:" in response.text
+
+
+def test_history_page_never_shows_nudges(client: TestClient) -> None:
+    from datetime import timedelta
+
+    yesterday = (datetime.now(TZ) - timedelta(days=1)).date().isoformat()
+    old = (datetime.now(TZ) - timedelta(days=5)).isoformat()
+    with db.session() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO briefs (brief_date, generated_at, degraded_lanes) "
+            "VALUES (?, ?, '[]')",
+            (yesterday, old),
+        )
+        conn.execute(
+            "INSERT INTO items (brief_date, lane, source, source_id, title, why_it_matters, "
+            "suggested_next_step, priority, deep_link, status, created_at) "
+            "VALUES (?, 'urgent', 'gmail', 'stale-hist', 'Old history item', '', '', 1, '', "
+            "'pending', ?)",
+            (yesterday, old),
+        )
+
+    response = client.get(f"/history/{yesterday}")
+
+    assert response.status_code == 200
+    assert "sat in Urgent" not in response.text
+
+
 def test_brief_shows_friendly_not_ready_page_instead_of_a_500(client: TestClient) -> None:
     today = datetime.now(TZ).date().isoformat()
     with db.session() as conn:
