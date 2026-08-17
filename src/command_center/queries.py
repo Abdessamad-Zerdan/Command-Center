@@ -616,6 +616,26 @@ def log_tool_call(tool: str, args: dict[str, Any], status: str) -> None:
         )
 
 
+def list_tool_calls(limit: int = 50) -> list[dict[str, Any]]:
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tool_call_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_task_events(limit: int = 50) -> list[dict[str, Any]]:
+    """task_id is a soft reference (see db.py's SCHEMA) — the row it
+    pointed at may since have been mutated, replaced, or deleted, so
+    metadata_json (captured at the moment of the event) is the only
+    reliable source for what it was about, not a join back to items."""
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM task_events ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 _DEFAULT_APP_SETTINGS = {"day_bounds_start": "07:00", "day_bounds_end": "22:00"}
 
 

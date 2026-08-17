@@ -1,3 +1,4 @@
+import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -437,6 +438,30 @@ def settings_page(request: Request):
             "assistant_chunk_count": index_status["chunk_count"],
             "health": health,
         },
+    )
+
+
+@app.get("/settings/activity")
+def settings_activity(request: Request):
+    # args_json/metadata_json are stored as raw JSON text — decoded here
+    # so the template can read fields directly rather than needing a
+    # custom Jinja filter just for this one page.
+    tool_calls = []
+    for row in queries.list_tool_calls():
+        row = dict(row)
+        row["args"] = json.loads(row["args_json"])
+        tool_calls.append(row)
+
+    task_events = []
+    for row in queries.list_task_events():
+        row = dict(row)
+        row["metadata"] = json.loads(row["metadata_json"])
+        task_events.append(row)
+
+    return templates.TemplateResponse(
+        request,
+        "settings_activity.html",
+        {"tool_calls": tool_calls, "task_events": task_events},
     )
 
 
