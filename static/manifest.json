@@ -1,0 +1,24 @@
+{
+  "name": "Daily Command Center",
+  "short_name": "Command Center",
+  "description": "A self-hosted personal dashboard for daily briefs, tasks, and finances.",
+  "start_url": "/brief",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#faf6f1",
+  "theme_color": "#b5563a",
+  "icons": [
+    {
+      "src": "/static/img/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/img/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
