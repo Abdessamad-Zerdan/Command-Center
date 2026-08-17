@@ -26,6 +26,7 @@ from command_center.config import (
     PROFILE,
     PROJECTS,
     REPO_ROOT,
+    TRIAGE_PROVIDER,
     TZ,
 )
 from command_center.db import init_db
@@ -137,6 +138,32 @@ def _lane_counts(lanes: dict[str, list[dict]]) -> dict[str, int]:
         lane: sum(1 for item in items if item["status"] == "pending")
         for lane, items in lanes.items()
     }
+
+
+def _health_snapshot() -> dict:
+    """Structural, no-live-network snapshot — same philosophy as
+    setup_wizard/status.py's is_setup_complete(): reports what's
+    configured/what the last attempt recorded, not a fresh live probe of
+    every external service on each call. degraded_today reads straight
+    off today's briefs.degraded_lanes, the same field the brief page's
+    own banner already surfaces — this just makes it visible from
+    Settings too, and in a form a monitoring tool can poll.
+    """
+    today_brief = queries.get_brief(_today())
+    degraded_today = today_brief["degraded_lanes"] if today_brief else []
+    return {
+        "status": "ok" if not degraded_today else "degraded",
+        "google_connected": auth.has_valid_credentials(),
+        "triage_provider": TRIAGE_PROVIDER,
+        "degraded_today": degraded_today,
+        "sources": queries.list_source_configs(),
+        "assistant_index": assistant_ingest.get_index_status(),
+    }
+
+
+@app.get("/health")
+def health():
+    return JSONResponse(_health_snapshot())
 
 
 @app.get("/")
@@ -400,6 +427,7 @@ def rename_pomodoro_task(payload: RenameTaskIn):
 @app.get("/settings")
 def settings_page(request: Request):
     index_status = assistant_ingest.get_index_status()
+    health = _health_snapshot()
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -407,6 +435,7 @@ def settings_page(request: Request):
             "sources": queries.list_source_configs(),
             "assistant_last_indexed_at": index_status["last_indexed_at"],
             "assistant_chunk_count": index_status["chunk_count"],
+            "health": health,
         },
     )
 
