@@ -621,66 +621,64 @@ def test_update_item_from_task_returns_false_when_nothing_matches(isolated_db: N
     assert queries.update_item_from_task("does-not-exist", title="X") is False
 
 
-def test_confirm_action_create_task_triggers_a_tasks_pull(
+def test_confirm_action_create_task_inserts_local_item_immediately(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
-    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "new-id"})
-    calls = []
-    monkeypatch.setattr(pipeline, "run_source", lambda name: calls.append(name))
-
-    chat.confirm_action({"tool": "create_task", "args": {"title": "X"}}, confirmed=True)
-
-    assert calls == ["tasks"]
-
-
-def _insert_google_task_item(conn, source_id: str, title: str, lane: str = "reading") -> None:
-    today = chat._today()
-    conn.execute(
-        "INSERT OR IGNORE INTO briefs (brief_date, generated_at, degraded_lanes) VALUES (?, ?, '[]')",
-        (today, "2026-08-14T10:00:00"),
-    )
-    conn.execute(
-        "INSERT INTO items (brief_date, lane, source, source_id, title, "
-        "why_it_matters, suggested_next_step, priority, deep_link, status, created_at) "
-        "VALUES (?, ?, 'google_tasks', ?, ?, '', '', 2, '', 'pending', ?)",
-        (today, lane, source_id, title, "2026-08-14T10:00:00"),
-    )
-
-
-def test_confirm_action_create_task_applies_lane_override(
-    isolated_db: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Simulates the state right after pipeline.run_source("tasks") pulls
-    # the new task in and triage classifies it (here into "reading", the
-    # wrong lane) — pipeline.run_source itself is mocked as a no-op so
-    # this test isolates the override step from the real pipeline/triage
-    # call. The whole point of this test: the user said "urgent", so the
-    # final lane must be "urgent", not whatever triage guessed.
-    with db.session() as conn:
-        _insert_google_task_item(conn, "gtask-new", "Renew passport", lane="reading")
+    # The whole point of the fast path: no pipeline pull/retriage in
+    # between — the local mirror row exists the moment confirm_action
+    # returns, not after however long an LLM re-triage call takes.
     monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
     monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "gtask-new"})
-    monkeypatch.setattr(pipeline, "run_source", lambda name: None)
+
+    chat.confirm_action(
+        {"tool": "create_task", "args": {"title": "Renew passport"}}, confirmed=True
+    )
+
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM items WHERE source_id = 'gtask-new'").fetchone()
+    assert row is not None
+    assert row["source"] == "google_tasks"
+    assert row["title"] == "Renew passport"
+    assert row["status"] == "pending"
+    assert row["brief_date"] == chat._today()
+
+
+def test_confirm_action_create_task_uses_stated_lane(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
+    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "gtask-urgent"})
 
     chat.confirm_action(
         {"tool": "create_task", "args": {"title": "Renew passport", "lane": "urgent"}}, confirmed=True
     )
 
     with db.session() as conn:
-        row = conn.execute("SELECT lane FROM items WHERE source_id = 'gtask-new'").fetchone()
+        row = conn.execute("SELECT lane FROM items WHERE source_id = 'gtask-urgent'").fetchone()
     assert row["lane"] == "urgent"
 
 
-def test_confirm_action_create_task_applies_project_override(
+def test_confirm_action_create_task_defaults_to_action_items_lane_when_unstated(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No triage pass runs anymore to auto-classify it, so an unstated
+    # lane needs some neutral default rather than crashing/being blank.
+    monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
+    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "gtask-plain"})
+
+    chat.confirm_action({"tool": "create_task", "args": {"title": "Just a task"}}, confirmed=True)
+
+    with db.session() as conn:
+        row = conn.execute("SELECT lane FROM items WHERE source_id = 'gtask-plain'").fetchone()
+    assert row["lane"] == "action_items"
+
+
+def test_confirm_action_create_task_applies_project_id(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project_id = queries.create_registered_project("Daily Command Center", "/tmp/dcc")
-    with db.session() as conn:
-        _insert_google_task_item(conn, "gtask-proj", "Update README")
     monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
     monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "gtask-proj"})
-    monkeypatch.setattr(pipeline, "run_source", lambda name: None)
 
     chat.confirm_action(
         {"tool": "create_task", "args": {"title": "Update README", "project_id": project_id}},
@@ -692,69 +690,38 @@ def test_confirm_action_create_task_applies_project_override(
     assert row["project_id"] == project_id
 
 
-def test_confirm_action_create_task_applies_both_lane_and_project_override(
+def test_confirm_action_create_task_sets_due_date(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    project_id = queries.create_registered_project("Daily Command Center", "/tmp/dcc")
-    with db.session() as conn:
-        _insert_google_task_item(conn, "gtask-both", "Ship the release", lane="reading")
     monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
-    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "gtask-both"})
-    monkeypatch.setattr(pipeline, "run_source", lambda name: None)
+    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "gtask-due"})
 
     chat.confirm_action(
-        {
-            "tool": "create_task",
-            "args": {"title": "Ship the release", "lane": "urgent", "project_id": project_id},
-        },
+        {"tool": "create_task", "args": {"title": "Renew passport", "due_date": "2026-08-21"}},
         confirmed=True,
     )
 
     with db.session() as conn:
-        row = conn.execute(
-            "SELECT lane, project_id FROM items WHERE source_id = 'gtask-both'"
-        ).fetchone()
-    assert row["lane"] == "urgent"
-    assert row["project_id"] == project_id
+        row = conn.execute("SELECT due_date FROM items WHERE source_id = 'gtask-due'").fetchone()
+    assert row["due_date"] == "2026-08-21"
 
 
-def test_confirm_action_create_task_no_override_when_lane_and_project_absent(
+def test_confirm_action_create_task_skips_local_insert_if_no_id_returned(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The "don't force a lane where none was implied" requirement: with
-    # no lane/project_id in args, triage's own classification must stand
-    # untouched.
-    with db.session() as conn:
-        _insert_google_task_item(conn, "gtask-plain", "Just a task", lane="reading")
+    # Google Tasks not returning an id would be unusual, but must not
+    # crash or surface an error — the real creation already succeeded.
     monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
-    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "gtask-plain"})
-    monkeypatch.setattr(pipeline, "run_source", lambda name: None)
-
-    chat.confirm_action({"tool": "create_task", "args": {"title": "Just a task"}}, confirmed=True)
-
-    with db.session() as conn:
-        row = conn.execute(
-            "SELECT lane, project_id FROM items WHERE source_id = 'gtask-plain'"
-        ).fetchone()
-    assert row["lane"] == "reading"
-    assert row["project_id"] is None
-
-
-def test_confirm_action_create_task_override_skips_gracefully_if_pull_produced_no_row(
-    isolated_db: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A degraded pull (triage failed, or the pull just hasn't produced a
-    # matching row yet) must not turn into a crash or an error surfaced
-    # to the user — the real Google Tasks creation already succeeded.
-    monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
-    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "never-appears"})
-    monkeypatch.setattr(pipeline, "run_source", lambda name: None)
+    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {})
 
     result = chat.confirm_action(
         {"tool": "create_task", "args": {"title": "X", "lane": "urgent"}}, confirmed=True
     )
 
     assert "Done" in result["answer"]
+    with db.session() as conn:
+        count = conn.execute("SELECT COUNT(*) AS n FROM items").fetchone()["n"]
+    assert count == 0
 
 
 def test_confirm_action_update_task_syncs_title_directly_without_a_pull(
@@ -834,10 +801,10 @@ def test_confirm_action_still_succeeds_if_local_sync_fails(
     monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
     monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "new-id"})
 
-    def _raise(name):
+    def _raise(**kwargs):
         raise RuntimeError("sync boom")
 
-    monkeypatch.setattr(pipeline, "run_source", _raise)
+    monkeypatch.setattr(queries, "create_synced_task_item", _raise)
 
     result = chat.confirm_action({"tool": "create_task", "args": {"title": "X"}}, confirmed=True)
 
@@ -1132,10 +1099,9 @@ def test_answer_does_not_attempt_extraction_when_history_present(
 def test_confirm_batch_all_checked_all_succeed(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    ids = iter(["new-id-a", "new-id-b"])
     monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
-    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "new-id"})
-    pull_calls = []
-    monkeypatch.setattr(pipeline, "run_source", lambda name: pull_calls.append(name))
+    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": next(ids)})
 
     tasks = [
         {"tool": "create_task", "args": {"title": "A"}, "checked": True},
@@ -1144,11 +1110,12 @@ def test_confirm_batch_all_checked_all_succeed(
     result = chat.confirm_batch(tasks, confirmed=True)
 
     assert "A" in result["answer"] and "B" in result["answer"]
-    assert pull_calls == ["tasks"]
     with db.session() as conn:
         rows = conn.execute("SELECT * FROM tool_call_log ORDER BY id").fetchall()
+        item_titles = {r["title"] for r in conn.execute("SELECT title FROM items").fetchall()}
     assert len(rows) == 2
     assert all(r["status"] == "confirmed" for r in rows)
+    assert item_titles == {"A", "B"}  # both landed locally immediately, no pull needed
 
 
 def test_confirm_batch_partial_checked(isolated_db: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1157,7 +1124,6 @@ def test_confirm_batch_partial_checked(isolated_db: None, monkeypatch: pytest.Mo
     monkeypatch.setattr(
         tools, "dispatch", lambda name, args, credentials: dispatched.append(args["title"]) or {"id": "x"}
     )
-    monkeypatch.setattr(pipeline, "run_source", lambda name: None)
 
     tasks = [
         {"tool": "create_task", "args": {"title": "A"}, "checked": True},
@@ -1180,8 +1146,6 @@ def test_confirm_batch_all_unchecked_but_confirmed_true_is_a_safe_no_op(
     monkeypatch.setattr(auth, "get_google_credentials", lambda: auth_called.append(1) or "fake-creds")
     dispatch_called = []
     monkeypatch.setattr(tools, "dispatch", lambda *a, **k: dispatch_called.append(1))
-    pull_called = []
-    monkeypatch.setattr(pipeline, "run_source", lambda name: pull_called.append(name))
 
     tasks = [
         {"tool": "create_task", "args": {"title": "A"}, "checked": False},
@@ -1192,7 +1156,6 @@ def test_confirm_batch_all_unchecked_but_confirmed_true_is_a_safe_no_op(
     assert result["answer"] == "Okay, not creating those tasks."
     assert auth_called == []
     assert dispatch_called == []
-    assert pull_called == []
     with db.session() as conn:
         rows = conn.execute("SELECT * FROM tool_call_log").fetchall()
     assert len(rows) == 2
@@ -1228,7 +1191,6 @@ def test_confirm_batch_one_dispatch_failure_among_several(
         return {"id": "ok"}
 
     monkeypatch.setattr(tools, "dispatch", fake_dispatch)
-    monkeypatch.setattr(pipeline, "run_source", lambda name: None)
 
     tasks = [
         {"tool": "create_task", "args": {"title": "Good task"}, "checked": True},
@@ -1253,8 +1215,6 @@ def test_confirm_batch_pure_move_batch_never_requests_google_credentials(
 
     monkeypatch.setattr(auth, "get_google_credentials", _raise)
     monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"moved": True})
-    pull_calls = []
-    monkeypatch.setattr(pipeline, "run_source", lambda name: pull_calls.append(name))
 
     tasks = [
         {"tool": "move_task_to_date", "args": {"item_id": 1, "target_date": "2026-08-17"}, "checked": True},
@@ -1263,7 +1223,6 @@ def test_confirm_batch_pure_move_batch_never_requests_google_credentials(
     result = chat.confirm_batch(tasks, confirmed=True)
 
     assert "Done" in result["answer"]
-    assert pull_calls == []  # no Google Tasks sync needed for a purely-local batch
     with db.session() as conn:
         rows = conn.execute("SELECT * FROM tool_call_log").fetchall()
     assert all(r["status"] == "confirmed" for r in rows)
@@ -1274,7 +1233,6 @@ def test_confirm_batch_mixed_create_and_move_batch(
 ) -> None:
     monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
     monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "new-id", "moved": True})
-    monkeypatch.setattr(pipeline, "run_source", lambda name: None)
 
     tasks = [
         {"tool": "create_task", "args": {"title": "New task"}, "checked": True},
