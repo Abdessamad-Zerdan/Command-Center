@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -7,7 +9,7 @@ from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -555,6 +557,56 @@ def delete_triage_rule(rule_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail="Rule not found")
     return {"ok": True}
+
+
+def _rows_to_csv(rows: list[dict]) -> str:
+    """Empty table -> empty string (no header row) rather than crashing
+    on csv.DictWriter's fieldnames requirement — an empty CSV download
+    is a legitimate, unsurprising result for "you have no data yet"."""
+    if not rows:
+        return ""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+@app.get("/settings/export.json")
+def export_json():
+    # "Your data, not the repo's" — the same framing SETUP.md already
+    # uses for the gitignored files. One file, everything in it, so
+    # it's actually usable if you ever want to leave this instance
+    # behind, not a paginated API for routine polling.
+    payload = {
+        "exported_at": datetime.now(TZ).isoformat(),
+        "items": queries.export_items(),
+        "finance_entries": queries.export_finance_entries(),
+        "briefs": queries.export_briefs(),
+    }
+    return Response(
+        content=json.dumps(payload, indent=2, default=str),
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=command-center-export.json"},
+    )
+
+
+@app.get("/settings/export/items.csv")
+def export_items_csv():
+    return Response(
+        content=_rows_to_csv(queries.export_items()),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=items.csv"},
+    )
+
+
+@app.get("/settings/export/finances.csv")
+def export_finances_csv():
+    return Response(
+        content=_rows_to_csv(queries.export_finance_entries()),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=finances.csv"},
+    )
 
 
 class SourceConfigIn(BaseModel):

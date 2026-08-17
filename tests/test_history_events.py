@@ -235,6 +235,36 @@ def test_delete_triage_rule_returns_false_for_unknown_id(isolated_db: None) -> N
     assert queries.delete_triage_rule(99999) is False
 
 
+# --- data export -----------------------------------------------------------
+
+
+def test_export_items_returns_full_rows(isolated_db: None) -> None:
+    _seed_item("2026-08-14", "urgent", "gmail", "g1", "Fix the thing")
+
+    rows = queries.export_items()
+
+    assert len(rows) == 1
+    assert rows[0]["title"] == "Fix the thing"
+    assert rows[0]["source"] == "gmail"
+
+
+def test_export_finance_entries_returns_full_rows(isolated_db: None) -> None:
+    queries.create_finance_entry(10.0, "Food", "spend", "2026-08-14", note="Lunch")
+
+    rows = queries.export_finance_entries()
+
+    assert len(rows) == 1
+    assert rows[0]["note"] == "Lunch"
+
+
+def test_export_briefs_returns_full_rows(isolated_db: None) -> None:
+    _seed_item("2026-08-14", "urgent", "gmail", "g1", "Fix the thing")
+
+    rows = queries.export_briefs()
+
+    assert [r["brief_date"] for r in rows] == ["2026-08-14"]
+
+
 # --- create_synced_task_item ---------------------------------------------
 
 
