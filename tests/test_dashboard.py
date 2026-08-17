@@ -272,6 +272,18 @@ def test_toast_component_renders_on_every_page(client: TestClient) -> None:
     assert "$store.toast" in response.text
 
 
+def test_toast_undo_button_double_negates_undofn_in_x_show(client: TestClient) -> None:
+    # Regression guard: Alpine auto-calls an x-show expression that
+    # resolves to a bare function reference — x-show="$store.toast.undoFn"
+    # (no !!) fires the undo action itself just to check whether to show
+    # the button, so Done/Snooze/etc. appeared to silently do nothing
+    # (the card faded out then immediately faded back in). The !! forces
+    # a boolean before Alpine's auto-call check ever sees a function.
+    response = client.get("/settings")
+    assert 'x-show="!!$store.toast.undoFn"' in response.text
+    assert 'x-show="$store.toast.undoFn"' not in response.text
+
+
 # --- within-lane reordering ------------------------------------------------
 
 
