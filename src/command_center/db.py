@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS items (
     scheduled_start TEXT,
     scheduled_end TEXT,
     project_id INTEGER REFERENCES registered_projects(id),
+    sort_order REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     UNIQUE (source, source_id)
 );
@@ -196,6 +197,11 @@ _MIGRATED_COLUMNS: dict[str, dict[str, str]] = {
         "scheduled_start": "TEXT",
         "scheduled_end": "TEXT",
         "project_id": "INTEGER REFERENCES registered_projects(id)",
+        # Defaults to 0 for every existing row on migration, so they all
+        # tie and fall back to the existing `id ASC` sort — exactly
+        # preserving today's order until someone actually drags
+        # something, at which point it gets a real, distinct value.
+        "sort_order": "REAL NOT NULL DEFAULT 0",
     },
     "briefs": {
         "is_fixture": "INTEGER NOT NULL DEFAULT 0",
