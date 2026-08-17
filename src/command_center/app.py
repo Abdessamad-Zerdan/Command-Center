@@ -510,7 +510,13 @@ def settings_triage_rules(request: Request):
     return templates.TemplateResponse(
         request,
         "settings_triage_rules.html",
-        {"rules": queries.list_triage_rules(), "lanes": LANES, "lane_labels": LANE_LABELS},
+        {
+            "rules": queries.list_triage_rules(),
+            "lanes": LANES,
+            "lane_labels": LANE_LABELS,
+            "corrections": queries.list_triage_corrections(),
+            "patterns": queries.triage_correction_patterns(),
+        },
     )
 
 

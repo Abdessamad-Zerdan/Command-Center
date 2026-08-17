@@ -197,6 +197,59 @@ def test_delete_triage_rule_route_404s_for_unknown_id(client: TestClient) -> Non
     assert response.status_code == 404
 
 
+def test_triage_rules_page_shows_no_corrections_empty_state(client: TestClient) -> None:
+    response = client.get("/settings/triage-rules")
+    assert "No corrections yet" in response.text
+
+
+def test_triage_rules_page_shows_a_recent_correction(client: TestClient) -> None:
+    today = datetime.now(TZ).date().isoformat()
+    with db.session() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO briefs (brief_date, generated_at, degraded_lanes) VALUES (?, ?, '[]')",
+            (today, datetime.now(TZ).isoformat()),
+        )
+        cursor = conn.execute(
+            "INSERT INTO items (brief_date, lane, source, source_id, title, why_it_matters, "
+            "suggested_next_step, priority, deep_link, status, created_at) "
+            "VALUES (?, 'reading', 'gmail', 'g1', 'Newsletter', '', '', 2, '', 'pending', ?)",
+            (today, datetime.now(TZ).isoformat()),
+        )
+        item_id = cursor.lastrowid
+    queries.update_item_lane(item_id, "urgent")
+
+    response = client.get("/settings/triage-rules")
+
+    assert "Newsletter" in response.text
+    assert "Recent corrections" in response.text
+
+
+def test_triage_rules_page_shows_a_suggested_rule_pattern(client: TestClient) -> None:
+    today = datetime.now(TZ).date().isoformat()
+    item_ids = []
+    with db.session() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO briefs (brief_date, generated_at, degraded_lanes) VALUES (?, ?, '[]')",
+            (today, datetime.now(TZ).isoformat()),
+        )
+        for source_id in ("g1", "g2"):
+            cursor = conn.execute(
+                "INSERT INTO items (brief_date, lane, source, source_id, title, why_it_matters, "
+                "suggested_next_step, priority, deep_link, status, created_at) "
+                "VALUES (?, 'reading', 'gmail', ?, 'Item', '', '', 2, '', 'pending', ?)",
+                (today, source_id, datetime.now(TZ).isoformat()),
+            )
+            item_ids.append(cursor.lastrowid)
+
+    for item_id in item_ids:
+        queries.update_item_lane(item_id, "urgent")
+
+    response = client.get("/settings/triage-rules")
+
+    assert "Suggested rules" in response.text
+    assert "Moved 2" in response.text
+
+
 def test_settings_page_has_export_links(client: TestClient) -> None:
     response = client.get("/settings")
     assert 'href="/settings/export.json"' in response.text

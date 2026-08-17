@@ -179,6 +179,20 @@ CREATE TABLE IF NOT EXISTS setup_invites (
 );
 
 CREATE INDEX IF NOT EXISTS idx_setup_invites_token ON setup_invites (token);
+
+CREATE TABLE IF NOT EXISTS triage_corrections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL,
+    brief_date TEXT NOT NULL,
+    source TEXT NOT NULL,
+    title TEXT NOT NULL,
+    from_lane TEXT NOT NULL,
+    to_lane TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_triage_corrections_pattern
+    ON triage_corrections (source, from_lane, to_lane);
 """
 
 

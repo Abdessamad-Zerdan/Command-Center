@@ -345,6 +345,67 @@ def test_update_item_lane_logs_updated_event_with_new_lane(isolated_db: None) ->
     assert json.loads(events[0]["metadata_json"])["lane"] == "action_items"
 
 
+# --- triage_corrections ----------------------------------------------------
+
+
+def test_update_item_lane_logs_a_correction_for_a_triaged_item(isolated_db: None) -> None:
+    item_id = _seed_item("2026-08-14", "reading", "gmail", "g5", "Article")
+    queries.update_item_lane(item_id, "urgent")
+
+    corrections = queries.list_triage_corrections()
+    assert len(corrections) == 1
+    assert corrections[0]["item_id"] == item_id
+    assert corrections[0]["from_lane"] == "reading"
+    assert corrections[0]["to_lane"] == "urgent"
+    assert corrections[0]["source"] == "gmail"
+    assert corrections[0]["title"] == "Article"
+
+
+def test_update_item_lane_does_not_log_a_correction_for_a_manual_item(isolated_db: None) -> None:
+    item_id = queries.create_manual_item("2026-08-14", "reading", "My task")
+    queries.update_item_lane(item_id, "urgent")
+
+    assert queries.list_triage_corrections() == []
+
+
+def test_update_item_lane_does_not_log_a_correction_when_lane_unchanged(isolated_db: None) -> None:
+    item_id = _seed_item("2026-08-14", "reading", "gmail", "g6", "Article")
+    queries.update_item_lane(item_id, "reading")
+
+    assert queries.list_triage_corrections() == []
+
+
+def test_list_triage_corrections_newest_first(isolated_db: None) -> None:
+    a = _seed_item("2026-08-14", "reading", "gmail", "ga", "A")
+    b = _seed_item("2026-08-14", "reading", "gmail", "gb", "B")
+    queries.update_item_lane(a, "urgent")
+    queries.update_item_lane(b, "urgent")
+
+    corrections = queries.list_triage_corrections()
+    assert [c["item_id"] for c in corrections] == [b, a]
+
+
+def test_triage_correction_patterns_requires_min_count(isolated_db: None) -> None:
+    item_id = _seed_item("2026-08-14", "reading", "gmail", "gc", "Once only")
+    queries.update_item_lane(item_id, "urgent")
+
+    assert queries.triage_correction_patterns() == []
+
+
+def test_triage_correction_patterns_groups_by_source_and_lanes(isolated_db: None) -> None:
+    a = _seed_item("2026-08-14", "reading", "gmail", "gd", "First")
+    b = _seed_item("2026-08-14", "reading", "gmail", "ge", "Second")
+    queries.update_item_lane(a, "urgent")
+    queries.update_item_lane(b, "urgent")
+
+    patterns = queries.triage_correction_patterns()
+    assert len(patterns) == 1
+    assert patterns[0]["source"] == "gmail"
+    assert patterns[0]["from_lane"] == "reading"
+    assert patterns[0]["to_lane"] == "urgent"
+    assert patterns[0]["count"] == 2
+
+
 # --- update_item_from_task ------------------------------------------------
 
 
