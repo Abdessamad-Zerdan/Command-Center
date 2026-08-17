@@ -404,6 +404,51 @@ def create_manual_item(
         return item_id
 
 
+def create_synced_task_item(
+    brief_date: str,
+    lane: str,
+    title: str,
+    source_id: str,
+    due_date: str | None = None,
+    project_id: int | None = None,
+) -> int:
+    """Inserts a google_tasks-sourced item directly, with no triage pass
+    — used right after the assistant's create_task tool creates the real
+    Google Task, so it shows up in the brief immediately instead of
+    waiting on a full pipeline re-pull-and-retriage (an LLM call, easily
+    several seconds). why_it_matters/suggested_next_step stay blank,
+    same as create_manual_item's manual items — there's no triage output
+    to fill them with, and item_card.html already renders fine without
+    them. `source_id` is the real Google Tasks id (not a generated
+    uuid4, unlike create_manual_item), so a later scheduled pull's own
+    INSERT OR IGNORE correctly recognizes this row as already-known
+    rather than duplicating it.
+    """
+    now = datetime.now(TZ).isoformat()
+    with session() as conn:
+        conn.execute(
+            "INSERT INTO briefs (brief_date, generated_at, degraded_lanes) "
+            "VALUES (?, ?, '[]') ON CONFLICT(brief_date) DO NOTHING",
+            (brief_date, now),
+        )
+        cursor = conn.execute(
+            """
+            INSERT INTO items
+                (brief_date, lane, source, source_id, title, why_it_matters,
+                 suggested_next_step, priority, deep_link, due_date, project_id, status, created_at)
+            VALUES (?, ?, 'google_tasks', ?, ?, '', '', 2, '', ?, ?, 'pending', ?)
+            """,
+            (brief_date, lane, source_id, title, due_date, project_id, now),
+        )
+        item_id = cursor.lastrowid
+        log_task_event(
+            item_id, "created",
+            metadata={"lane": lane, "source": "google_tasks", "title": title},
+            conn=conn,
+        )
+        return item_id
+
+
 def get_time_by_task(limit: int = 10) -> list[dict[str, Any]]:
     with session() as conn:
         rows = conn.execute(
@@ -514,18 +559,6 @@ def list_items_by_project(project_id: int) -> list[dict[str, Any]]:
             (project_id,),
         ).fetchall()
         return [dict(row) for row in rows]
-
-
-def get_item_id_by_source(source: str, source_id: str) -> int | None:
-    """Resolves a source's own id (e.g. a Google Tasks id) to this app's
-    local items.id — used right after a tool-call-driven creation to find
-    the row a scheduled re-pull just inserted, so its lane/project_id can
-    be overridden to match what the user actually asked for."""
-    with session() as conn:
-        row = conn.execute(
-            "SELECT id FROM items WHERE source = ? AND source_id = ?", (source, source_id)
-        ).fetchone()
-        return row["id"] if row is not None else None
 
 
 def update_item_from_task(source_id: str, title: str | None = None, status: str | None = None) -> bool:

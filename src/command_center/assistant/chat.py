@@ -19,7 +19,7 @@ import logging
 import re
 from datetime import datetime
 
-from command_center import auth, pipeline, queries, triage
+from command_center import auth, queries, triage
 from command_center.assistant import retrieval, tools
 from command_center.config import LANES, PROFILE, TZ
 
@@ -392,33 +392,34 @@ def answer(question: str, history: list[dict] | None = None) -> dict:
     return {"answer": result["content"] or "", "sources": sources}
 
 
-def _apply_create_task_overrides(created_task_id: str | None, args: dict) -> None:
-    """create_task's lane/project_id args have no home in Google Tasks
-    itself (it has no such fields) and no effect on triage's own
-    classification of the local mirror row the pull above just inserted
-    — that row's lane is whatever triage's LLM decided from the title/
-    notes alone, independent of what the user told the assistant. This
-    explicitly overrides it after the fact, using the same
-    update_item_lane/update_item_project the manual-edit UI already
-    uses. Skipped silently if the pull didn't produce a matching local
-    row (e.g. that source's triage degraded this pull) — same
-    best-effort posture as the rest of this sync.
+_DEFAULT_CREATE_TASK_LANE = "action_items"
+
+
+def _create_local_item_for_created_task(created_task_id: str | None, args: dict) -> None:
+    """Inserts the local mirror row for a task the assistant just created
+    in Google Tasks — directly, from the args already on hand, instead
+    of triggering a full pipeline re-pull-and-retriage (an LLM call,
+    easily several seconds) just to re-derive a lane/title the request
+    already settled. Falls back to action_items when the user didn't
+    state a lane — there's no triage pass left to auto-classify it, so
+    this is the closest thing to a neutral default (urgent/meeting_prep/
+    tasks_due all imply something the user didn't actually say). Skipped
+    silently if Google didn't hand back an id — the real creation
+    already succeeded either way.
     """
     if not created_task_id:
         return
-    item_id = queries.get_item_id_by_source("google_tasks", created_task_id)
-    if item_id is None:
-        logger.warning(
-            "Could not find local item for newly created task %s — skipping lane/project override",
-            created_task_id,
-        )
-        return
     lane = args.get("lane")
-    if lane in LANES:
-        queries.update_item_lane(item_id, lane)
-    project_id = tools.coerce_project_id(args.get("project_id"))
-    if project_id is not None:
-        queries.update_item_project(item_id, project_id)
+    if lane not in LANES:
+        lane = _DEFAULT_CREATE_TASK_LANE
+    queries.create_synced_task_item(
+        brief_date=_today(),
+        lane=lane,
+        title=args["title"],
+        source_id=created_task_id,
+        due_date=args.get("due_date"),
+        project_id=tools.coerce_project_id(args.get("project_id")),
+    )
 
 
 def _sync_local_task_state(tool_name: str, args: dict, result: dict | None) -> None:
@@ -432,8 +433,7 @@ def _sync_local_task_state(tool_name: str, args: dict, result: dict | None) -> N
     """
     try:
         if tool_name == "create_task":
-            pipeline.run_source("tasks")  # new source_id — a full pull triages it in
-            _apply_create_task_overrides((result or {}).get("id"), args)
+            _create_local_item_for_created_task((result or {}).get("id"), args)
         elif tool_name == "update_task" and args.get("title"):
             queries.update_item_from_task(args["task_id"], title=args["title"])
         elif tool_name == "complete_task":
@@ -541,7 +541,7 @@ def confirm_batch(tasks: list[dict], confirmed: bool) -> dict:
         args = task.get("args") or {}
         tool_name = task.get("tool") or "create_task"
         try:
-            tools.dispatch(tool_name, args, credentials)
+            result = tools.dispatch(tool_name, args, credentials)
         except Exception:
             logger.exception("Batch tool call failed: %s", tool_name)
             queries.log_tool_call(tool_name, args, "failed")
@@ -552,6 +552,7 @@ def confirm_batch(tasks: list[dict], confirmed: bool) -> dict:
             continue
         queries.log_tool_call(tool_name, args, "confirmed")
         if tool_name == "create_task":
+            _create_local_item_for_created_task((result or {}).get("id"), args)
             created_titles.append(args.get("title") or "untitled task")
         elif tool_name == "update_task" and args.get("title"):
             queries.update_item_from_task(args["task_id"], title=args["title"])
@@ -563,18 +564,6 @@ def confirm_batch(tasks: list[dict], confirmed: bool) -> dict:
             # move_task_to_date already applied its own local mutation
             # inside dispatch() — nothing else to sync.
             other_done.append(tools.describe_done(tool_name, args, title_lookup, project_lookup))
-
-    if created_titles:
-        # Same reasoning as _sync_local_task_state's create_task branch —
-        # new source_ids need a full pull to get triaged into the local
-        # items table. Inlined here (once, after the loop) rather than
-        # reused, since that function's other two branches don't apply
-        # to a batch of creates. Best-effort: the real Google Tasks
-        # creates already succeeded by the time this runs.
-        try:
-            pipeline.run_source("tasks")
-        except Exception:
-            logger.exception("Failed to sync local task state after batch create")
 
     parts = []
     if created_titles:

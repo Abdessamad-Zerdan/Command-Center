@@ -93,6 +93,55 @@ def test_create_manual_item_logs_created_event(isolated_db: None) -> None:
     assert meta == {"lane": "urgent", "source": "manual", "title": "Renew passport"}
 
 
+# --- create_synced_task_item ---------------------------------------------
+
+
+def test_create_synced_task_item_logs_created_event(isolated_db: None) -> None:
+    item_id = queries.create_synced_task_item(
+        "2026-08-14", "action_items", "Renew passport", "gtask-1"
+    )
+
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+    assert row["source"] == "google_tasks"
+    assert row["source_id"] == "gtask-1"
+    assert row["status"] == "pending"
+
+    events = _events(item_id)
+    assert len(events) == 1
+    assert events[0]["event_type"] == "created"
+    import json
+
+    assert json.loads(events[0]["metadata_json"]) == {
+        "lane": "action_items",
+        "source": "google_tasks",
+        "title": "Renew passport",
+    }
+
+
+def test_create_synced_task_item_creates_target_brief_row_if_missing(isolated_db: None) -> None:
+    queries.create_synced_task_item("2026-09-01", "action_items", "X", "gtask-2")
+
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM briefs WHERE brief_date = ?", ("2026-09-01",)).fetchone()
+    assert row is not None
+
+
+def test_create_synced_task_item_sets_due_date_and_project_id(isolated_db: None) -> None:
+    project_id = queries.create_registered_project("Daily Command Center", "/tmp/dcc")
+
+    item_id = queries.create_synced_task_item(
+        "2026-08-14", "action_items", "X", "gtask-3", due_date="2026-08-21", project_id=project_id
+    )
+
+    with db.session() as conn:
+        row = conn.execute(
+            "SELECT due_date, project_id FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+    assert row["due_date"] == "2026-08-21"
+    assert row["project_id"] == project_id
+
+
 # --- update_item_title / update_item_lane -------------------------------
 
 
