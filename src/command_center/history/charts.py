@@ -8,7 +8,8 @@ source.
 
 from typing import Any
 
-from command_center.config import LANE_LABELS, LANES
+from command_center import queries
+from command_center.config import LANES
 
 _LINE = "stroke-rust dark:stroke-rust-light"
 _DOT = "fill-rust dark:fill-rust-light"
@@ -64,6 +65,7 @@ def render_lane_bars_svg(completion: dict[str, Any], width: int = 640, height: i
     # undercount.
     lanes = [l for l in LANES if l in by_lane] + sorted(l for l in by_lane if l not in LANES)
     max_v = max((max(by_lane[l]["created"], by_lane[l]["completed"]) for l in lanes), default=0) or 1
+    lane_labels = queries.get_lane_labels()
 
     group_w = inner_w / max(len(lanes), 1)
     bar_w, gap = group_w * 0.28, group_w * 0.08
@@ -86,7 +88,7 @@ def render_lane_bars_svg(completion: dict[str, Any], width: int = 640, height: i
         )
         labels.append(
             f'<text x="{group_x + group_w / 2:.1f}" y="{height - 6}" font-size="9" '
-            f'text-anchor="middle" class="{_MUTED_TEXT}">{LANE_LABELS.get(lane, lane)}</text>'
+            f'text-anchor="middle" class="{_MUTED_TEXT}">{lane_labels.get(lane, lane)}</text>'
         )
 
     legend = (

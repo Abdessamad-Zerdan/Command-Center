@@ -24,7 +24,6 @@ from command_center.scheduling.router import router as scheduling_router
 from command_center.config import (
     BUILD_LOG,
     FOOTER_LINKS,
-    LANE_LABELS,
     LANES,
     PROFILE,
     PROJECTS,
@@ -214,7 +213,7 @@ def dashboard(request: Request):
         "dashboard.html",
         {
             "brief": brief,
-            "lane_labels": LANE_LABELS,
+            "lane_labels": queries.get_lane_labels(),
             "lanes_order": LANES,
             "lane_counts": _lane_counts(brief["lanes"]),
             "now_istanbul": now,
@@ -250,7 +249,7 @@ def history_detail(request: Request, brief_date: str):
         "dashboard.html",
         {
             "brief": brief,
-            "lane_labels": LANE_LABELS,
+            "lane_labels": queries.get_lane_labels(),
             "lanes_order": LANES,
             "lane_counts": _lane_counts(brief["lanes"]),
             "now_istanbul": now,
@@ -285,7 +284,7 @@ def lanes_partial(request: Request, date: str | None = None):
     html = templates.env.get_template("partials/lanes.html").render(
         request=request,
         brief=brief,
-        lane_labels=LANE_LABELS,
+        lane_labels=queries.get_lane_labels(),
         lanes_order=LANES,
         is_history=brief_date != _today(),
     )
@@ -515,7 +514,7 @@ def settings_triage_rules(request: Request):
         {
             "rules": queries.list_triage_rules(),
             "lanes": LANES,
-            "lane_labels": LANE_LABELS,
+            "lane_labels": queries.get_lane_labels(),
             "corrections": queries.list_triage_corrections(),
             "patterns": queries.triage_correction_patterns(),
         },
@@ -565,6 +564,27 @@ def delete_triage_rule(rule_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail="Rule not found")
     return {"ok": True}
+
+
+@app.get("/settings/lane-labels")
+def settings_lane_labels(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "settings_lane_labels.html",
+        {"lanes": LANES, "lane_labels": queries.get_lane_labels()},
+    )
+
+
+class LaneLabelIn(BaseModel):
+    label: str
+
+
+@app.post("/settings/lane-labels/{lane}")
+def update_lane_label(lane: str, payload: LaneLabelIn):
+    if lane not in LANES:
+        raise HTTPException(status_code=404, detail=f"Unknown lane: {lane!r}")
+    queries.set_lane_label(lane, payload.label)
+    return {"ok": True, "label": queries.get_lane_labels()[lane]}
 
 
 def _rows_to_csv(rows: list[dict]) -> str:

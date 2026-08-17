@@ -17,8 +17,8 @@ making its cached reflection permanently valid with no special-casing.
 
 from datetime import date, datetime, timedelta
 
-from command_center import triage
-from command_center.config import LANES, LANE_LABELS, TZ
+from command_center import queries, triage
+from command_center.config import LANES, TZ
 from command_center.db import session
 from command_center.history import aggregations, periods
 
@@ -53,14 +53,15 @@ def _lane_order(current: dict, previous: dict) -> list[str]:
 def _format_period_block(label_text: str, data: dict, lanes: list[str]) -> str:
     completion = data["completion"]
     by_lane = completion["by_lane"]
+    lane_labels = queries.get_lane_labels()
 
     def _counts(field: str) -> str:
-        parts = [f"{LANE_LABELS.get(l, 'Unknown')}: {by_lane.get(l, {}).get(field, 0)}" for l in lanes]
+        parts = [f"{lane_labels.get(l, 'Unknown')}: {by_lane.get(l, {}).get(field, 0)}" for l in lanes]
         return ", ".join(parts)
 
     avg_time = data["avg_time"]
     avg_parts = [
-        f"{LANE_LABELS.get(l, 'Unknown')} {round(avg_time[l]['avg_hours'], 1)}h (n={avg_time[l]['n']})"
+        f"{lane_labels.get(l, 'Unknown')} {round(avg_time[l]['avg_hours'], 1)}h (n={avg_time[l]['n']})"
         for l in lanes
         if l in avg_time
     ]

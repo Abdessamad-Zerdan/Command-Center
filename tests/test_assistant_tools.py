@@ -1,6 +1,18 @@
+from pathlib import Path
+
 import pytest
 
+from command_center import db
 from command_center.assistant import tools
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # describe_pending/describe_done's lane clause reads queries.get_lane_labels(),
+    # a real DB call (renamed lanes since Settings > Lane labels) — every test in
+    # this file needs an isolated DB, not the machine's real command_center.db.
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    db.init_db()
 
 
 def test_tool_schemas_have_expected_names_and_required_fields() -> None:
@@ -278,6 +290,16 @@ def test_describe_pending_create_task() -> None:
     )
     assert "Renew passport" in text
     assert "Aug 21" in text
+
+
+def test_describe_pending_create_task_shows_a_renamed_lane_label() -> None:
+    from command_center import queries
+
+    queries.set_lane_label("urgent", "Fires")
+
+    text = tools.describe_pending("create_task", {"title": "Renew passport", "lane": "urgent"}, {})
+
+    assert "Fires" in text
 
 
 def test_describe_pending_create_task_shows_detected_lane() -> None:
