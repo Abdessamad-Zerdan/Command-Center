@@ -56,14 +56,22 @@ def _looks_like_brain_dump(question: str) -> bool:
 
 SYSTEM_PROMPT_TEMPLATE = (
     "You are a personal assistant answering questions about {name} and, "
-    "when asked, creating/updating/completing their Google Tasks, or "
-    "moving an item from a past day's brief to a different day. "
+    "when asked, creating/updating/completing their Google Tasks, "
+    "moving an item from a past day's brief to a different day, or "
+    "taking them to a specific day's brief. "
     "Answer plain questions using only the context provided below (their "
     "vision document, portfolio, current tasks, and recent past items). "
     "If the context doesn't answer the question, say \"I don't have that "
     "information\" — don't guess beyond what's given.\n\n"
-    "Only call a tool when the user clearly asks to create, change, "
-    "complete, or move a task. Before calling create_task: if they "
+    "If the user asks to see, go to, pull up, or be taken to a day's "
+    "brief or tasks (their own or a past day's, e.g. 'take me to "
+    "yesterday's brief', 'show me last Tuesday'), call view_brief with "
+    "that day resolved to YYYY-MM-DD — this only navigates, it never "
+    "changes anything, so call it right away without asking for "
+    "confirmation first, unlike every other tool here.\n\n"
+    "Only call create_task/update_task/complete_task/move_task_to_date "
+    "when the user clearly asks to create, change, complete, or move a "
+    "task. Before calling create_task: if they "
     "haven't stated a due date, ask them for one in plain text first — "
     "never invent or assume one. If they explicitly stated urgency or "
     "named a lane directly ('urgent', 'asap', 'this is important', "
@@ -232,6 +240,31 @@ def _extract_tasks(question: str) -> list[dict]:
     return extracted
 
 
+def _handle_view_brief(call: dict) -> dict:
+    """view_brief is pure navigation — no mutation, so unlike every other
+    tool it's executed here directly rather than becoming a
+    pending_action the user has to confirm. Returning a "navigate" key
+    is the frontend's cue to actually change the page; router.py's
+    /assistant/ask just spreads whatever this returns straight into the
+    JSON response, so no route change was needed for that to work.
+    """
+    args = call["arguments"]
+    error = tools.validate_args("view_brief", args)
+    if error:
+        logger.info("Malformed view_brief call from Groq: %s (%s)", error, args)
+        return {
+            "answer": "I couldn't tell which day you meant — could you rephrase that?",
+            "sources": [],
+        }
+
+    date = args["date"]
+    if queries.get_brief(date) is None:
+        return {"answer": f"There's no brief for {date}.", "sources": []}
+
+    target = "/brief" if date == _today() else f"/history/{date}"
+    return {"answer": f"Taking you to {date}.", "sources": [], "navigate": target}
+
+
 def answer(question: str, history: list[dict] | None = None) -> dict:
     if not history and _looks_like_brain_dump(question):
         extracted = _extract_tasks(question)
@@ -294,6 +327,15 @@ def answer(question: str, history: list[dict] | None = None) -> dict:
     messages.append({"role": "user", "content": user_content})
 
     result = triage.run_groq_chat_with_tools(messages, tools=tools.TOOL_SCHEMAS)
+
+    view_calls = [c for c in result["tool_calls"] if c["name"] == "view_brief"]
+    if view_calls:
+        # Handled before the generic single/multi-call branches below —
+        # navigation never needs confirmation, so it must never become a
+        # pending_action/pending_batch. If the model mixed it with other
+        # calls in the same turn (an edge case), navigation wins; the
+        # other calls are simply dropped rather than half-applied.
+        return _handle_view_brief(view_calls[0])
 
     if len(result["tool_calls"]) == 1:
         call = result["tool_calls"][0]

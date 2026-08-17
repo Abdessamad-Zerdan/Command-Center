@@ -227,6 +227,141 @@ def test_answer_returns_pending_action_for_a_valid_tool_call(
     assert rows[0]["tool"] == "create_task"
 
 
+def test_answer_navigates_for_a_view_brief_call_to_a_past_day_with_a_brief(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import date, timedelta
+
+    yesterday = (date.fromisoformat(chat._today()) - timedelta(days=1)).isoformat()
+    queries.create_manual_item(yesterday, "urgent", "Old task")
+
+    monkeypatch.setattr(retrieval, "top_k", lambda query, k=5: [])
+    monkeypatch.setattr(
+        triage,
+        "run_groq_chat_with_tools",
+        lambda messages, tools: {
+            "content": None,
+            "tool_calls": [{"name": "view_brief", "arguments": {"date": yesterday}}],
+        },
+    )
+
+    result = chat.answer("take me to yesterday's brief")
+
+    assert result["navigate"] == f"/history/{yesterday}"
+    assert "pending_action" not in result
+    assert "pending_batch" not in result
+
+
+def test_answer_navigates_to_slash_brief_for_todays_own_date(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    today = chat._today()
+    queries.create_manual_item(today, "urgent", "Today task")
+
+    monkeypatch.setattr(retrieval, "top_k", lambda query, k=5: [])
+    monkeypatch.setattr(
+        triage,
+        "run_groq_chat_with_tools",
+        lambda messages, tools: {
+            "content": None,
+            "tool_calls": [{"name": "view_brief", "arguments": {"date": today}}],
+        },
+    )
+
+    result = chat.answer("take me to today's brief")
+
+    assert result["navigate"] == "/brief"
+
+
+def test_answer_view_brief_with_no_brief_for_that_date_gives_plain_message(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(retrieval, "top_k", lambda query, k=5: [])
+    monkeypatch.setattr(
+        triage,
+        "run_groq_chat_with_tools",
+        lambda messages, tools: {
+            "content": None,
+            "tool_calls": [{"name": "view_brief", "arguments": {"date": "2020-01-01"}}],
+        },
+    )
+
+    result = chat.answer("take me to Jan 1 2020")
+
+    assert "navigate" not in result
+    assert "2020-01-01" in result["answer"]
+
+
+def test_answer_view_brief_malformed_date_gives_clarifying_message(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(retrieval, "top_k", lambda query, k=5: [])
+    monkeypatch.setattr(
+        triage,
+        "run_groq_chat_with_tools",
+        lambda messages, tools: {
+            "content": None,
+            "tool_calls": [{"name": "view_brief", "arguments": {"date": "not-a-date"}}],
+        },
+    )
+
+    result = chat.answer("take me to some day")
+
+    assert "navigate" not in result
+    assert "rephrase" in result["answer"]
+
+
+def test_answer_view_brief_never_becomes_a_pending_action_even_when_alone(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The core guarantee: navigation must never require a confirm click,
+    # unlike every other tool — regression-guards the interception
+    # happening before the generic single-call pending_action branch.
+    today = chat._today()
+    queries.create_manual_item(today, "urgent", "Today task")
+    monkeypatch.setattr(retrieval, "top_k", lambda query, k=5: [])
+    monkeypatch.setattr(
+        triage,
+        "run_groq_chat_with_tools",
+        lambda messages, tools: {
+            "content": None,
+            "tool_calls": [{"name": "view_brief", "arguments": {"date": today}}],
+        },
+    )
+
+    result = chat.answer("go to today")
+
+    assert "pending_action" not in result
+    with db.session() as conn:
+        rows = conn.execute("SELECT * FROM tool_call_log").fetchall()
+    assert rows == []  # navigation is never logged as a proposed/confirmed change
+
+
+def test_answer_view_brief_takes_priority_over_a_mixed_call_in_the_same_turn(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    today = chat._today()
+    queries.create_manual_item(today, "urgent", "Today task")
+    monkeypatch.setattr(retrieval, "top_k", lambda query, k=5: [])
+    monkeypatch.setattr(
+        triage,
+        "run_groq_chat_with_tools",
+        lambda messages, tools: {
+            "content": None,
+            "tool_calls": [
+                {"name": "create_task", "arguments": {"title": "X"}},
+                {"name": "view_brief", "arguments": {"date": today}},
+            ],
+        },
+    )
+
+    result = chat.answer("show me today and also add a task called X")
+
+    assert result["navigate"] == "/brief"
+    assert "pending_action" not in result
+    assert "pending_batch" not in result
+
+
 def test_answer_returns_pending_action_for_a_single_move_task_to_date_call(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

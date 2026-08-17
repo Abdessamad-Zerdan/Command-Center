@@ -481,7 +481,12 @@
           .then(r => r.json())
           .then(data => {
             this.thinking = false;
-            if (data.ok && data.pending_action) {
+            if (data.ok && data.navigate) {
+              // Pure navigation, no confirmation involved — a full page
+              // load, not an SPA route, since /history/{date} is a
+              // server-rendered template.
+              window.location.href = data.navigate;
+            } else if (data.ok && data.pending_action) {
               this.messages.push({ role: 'pending', ...data.pending_action });
             } else if (data.ok && data.pending_batch) {
               this.messages.push({

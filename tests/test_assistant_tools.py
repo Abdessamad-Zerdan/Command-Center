@@ -5,11 +5,18 @@ from command_center.assistant import tools
 
 def test_tool_schemas_have_expected_names_and_required_fields() -> None:
     by_name = {t["function"]["name"]: t["function"] for t in tools.TOOL_SCHEMAS}
-    assert set(by_name) == {"create_task", "update_task", "complete_task", "move_task_to_date"}
+    assert set(by_name) == {
+        "create_task",
+        "update_task",
+        "complete_task",
+        "move_task_to_date",
+        "view_brief",
+    }
     assert by_name["create_task"]["parameters"]["required"] == ["title"]
     assert by_name["update_task"]["parameters"]["required"] == ["task_id"]
     assert by_name["complete_task"]["parameters"]["required"] == ["task_id"]
     assert by_name["move_task_to_date"]["parameters"]["required"] == ["item_id", "target_date"]
+    assert by_name["view_brief"]["parameters"]["required"] == ["date"]
 
 
 def test_create_task_schema_has_lane_and_project_id_fields() -> None:
@@ -151,6 +158,16 @@ def test_dispatch_complete_task(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_dispatch_unknown_tool_raises() -> None:
     with pytest.raises(ValueError):
         tools.dispatch("delete_everything", {}, credentials="fake-creds")
+
+
+def test_validate_args_requires_date_for_view_brief() -> None:
+    assert tools.validate_args("view_brief", {}) is not None
+    assert tools.validate_args("view_brief", {"date": "2026-08-16"}) is None
+
+
+def test_validate_args_rejects_malformed_view_brief_date() -> None:
+    assert tools.validate_args("view_brief", {"date": "yesterday"}) is not None
+    assert tools.validate_args("view_brief", {"date": "08/16/2026"}) is not None
 
 
 def test_dispatch_move_task_to_date_ignores_credentials(monkeypatch: pytest.MonkeyPatch) -> None:

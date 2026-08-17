@@ -14,7 +14,7 @@ from command_center.sources import tasks as tasks_module
 
 DEFAULT_TASKLIST_ID = "@default"
 
-TOOL_NAMES = {"create_task", "update_task", "complete_task", "move_task_to_date"}
+TOOL_NAMES = {"create_task", "update_task", "complete_task", "move_task_to_date", "view_brief"}
 
 TOOL_SCHEMAS = [
     {
@@ -165,6 +165,35 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "view_brief",
+            "description": (
+                "Navigate the user to the brief for a specific day — "
+                "today's or a past day's. Use this when they ask to see, "
+                "go to, pull up, or be taken to a day's brief or tasks "
+                "(e.g. 'take me to yesterday's brief', 'show me last "
+                "Tuesday', 'go to today'). This only navigates — it "
+                "never changes anything, so don't ask for confirmation "
+                "first."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "description": (
+                            "The day to show, in YYYY-MM-DD format. Resolve "
+                            "relative dates ('yesterday', 'last Monday', "
+                            "'today') against today's date given in context."
+                        ),
+                    },
+                },
+                "required": ["date"],
+            },
+        },
+    },
 ]
 
 # Passed to run_groq_chat_with_tools on its own (never merged into
@@ -260,6 +289,11 @@ def validate_args(name: str, args: dict | None) -> str | None:
             return "move_task_to_date's target_date must be in YYYY-MM-DD format."
         if args.get("lane") and args["lane"] not in LANES:
             return f"move_task_to_date's lane must be one of: {', '.join(LANES)}."
+    if name == "view_brief":
+        if _blank(args.get("date")):
+            return "view_brief requires a date."
+        elif not _parses_as_date(args["date"]):
+            return "view_brief's date must be in YYYY-MM-DD format."
     return None
 
 
