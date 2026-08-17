@@ -158,7 +158,9 @@ def test_reorder_item_with_no_after_id_moves_to_the_front(isolated_db: None) -> 
     assert [r["id"] for r in rows] == [b, a]
 
 
-def test_reorder_item_scoped_to_same_priority_band(isolated_db: None) -> None:
+def test_reorder_item_crosses_priority_bands_and_adopts_the_target_priority(
+    isolated_db: None,
+) -> None:
     # _seed_item's default priority is 2 for all three — bump one to
     # priority 1 directly so it's in a different band.
     a = _seed_item("2026-08-14", "action_items", "gmail", "a", "A")
@@ -168,7 +170,23 @@ def test_reorder_item_scoped_to_same_priority_band(isolated_db: None) -> None:
 
     moved = queries.reorder_item(b, after_item_id=a)
 
-    assert moved is False  # a isn't a sibling of b anymore — different priority band
+    assert moved is True
+    with db.session() as conn:
+        row = conn.execute("SELECT priority FROM items WHERE id = ?", (b,)).fetchone()
+    assert row["priority"] == 1  # b adopted a's (the drop target's) priority band
+
+
+def test_reorder_item_within_the_same_priority_band_leaves_priority_unchanged(
+    isolated_db: None,
+) -> None:
+    a = _seed_item("2026-08-14", "action_items", "gmail", "a", "A")
+    b = _seed_item("2026-08-14", "action_items", "gmail", "b", "B")
+
+    queries.reorder_item(b, after_item_id=a)
+
+    with db.session() as conn:
+        row = conn.execute("SELECT priority FROM items WHERE id = ?", (b,)).fetchone()
+    assert row["priority"] == 2  # _seed_item's default — unchanged, same band as a
 
 
 def test_reorder_item_returns_false_for_unknown_item(isolated_db: None) -> None:
