@@ -890,6 +890,26 @@ def set_day_bounds(start: str, end: str) -> None:
         )
 
 
+def was_nudge_notified_today(nudge_id: str, today: str) -> bool:
+    """One ntfy push per nudge id per day — the coordinator tick runs
+    every 5 minutes, so without this a still-unresolved nudge would
+    spam a push every tick instead of once when it first appears."""
+    with session() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (f"ntfy_last_sent_{nudge_id}",)
+        ).fetchone()
+    return row is not None and row["value"] == today
+
+
+def mark_nudge_notified(nudge_id: str, today: str) -> None:
+    with session() as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (f"ntfy_last_sent_{nudge_id}", today),
+        )
+
+
 def list_recurring_commitments(
     day_of_week: int | None = None, active_only: bool = False
 ) -> list[dict[str, Any]]:

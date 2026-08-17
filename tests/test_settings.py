@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from command_center import auth, db, pipeline, queries
+from command_center import auth, db, notify, pipeline, queries
 from command_center.assistant import ingest as assistant_ingest
 from command_center.config import TZ
 from command_center.setup_wizard import status as setup_status
@@ -287,6 +287,92 @@ def test_triage_rules_page_shows_a_suggested_rule_pattern(client: TestClient) ->
 
     assert "Suggested rules" in response.text
     assert "Moved 2" in response.text
+
+
+def test_settings_page_shows_notifications_not_configured(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(notify, "NTFY_TOPIC", "")
+    response = client.get("/settings")
+    assert "Not configured" in response.text
+
+
+def test_settings_page_shows_notifications_configured(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(notify, "NTFY_TOPIC", "my-topic")
+    response = client.get("/settings")
+    assert "ntfy configured" in response.text
+
+
+def test_send_test_notification_route_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(notify, "send", lambda *a, **k: True)
+    response = client.post("/settings/notifications/test")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_send_test_notification_route_failure_surfaces_an_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(notify, "send", lambda *a, **k: False)
+    monkeypatch.setattr(notify, "NTFY_TOPIC", "my-topic")
+    response = client.post("/settings/notifications/test")
+    assert response.status_code == 502
+    assert "ntfy" in response.json()["detail"].lower()
+
+
+def test_send_test_notification_route_failure_when_unconfigured(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(notify, "send", lambda *a, **k: False)
+    monkeypatch.setattr(notify, "NTFY_TOPIC", "")
+    response = client.post("/settings/notifications/test")
+    assert response.status_code == 502
+    assert "NTFY_TOPIC" in response.json()["detail"]
+
+
+def test_notify_new_nudges_sends_once_and_dedups_on_repeated_ticks(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from command_center import app as app_module
+    from datetime import timedelta
+
+    monkeypatch.setattr(app_module.notify, "NTFY_TOPIC", "my-topic")
+    calls = []
+    monkeypatch.setattr(app_module.notify, "send", lambda *a, **k: calls.append(a) or True)
+
+    today = datetime.now(TZ).date().isoformat()
+    old = (datetime.now(TZ) - timedelta(days=3)).isoformat()
+    with db.session() as conn:
+        conn.execute(
+            "INSERT INTO items (brief_date, lane, source, source_id, title, why_it_matters, "
+            "suggested_next_step, priority, deep_link, status, created_at) "
+            "VALUES (?, 'urgent', 'gmail', 'stale-notify', 'Stale item', '', '', 1, '', "
+            "'pending', ?)",
+            (today, old),
+        )
+
+    app_module._notify_new_nudges()
+    app_module._notify_new_nudges()  # a second tick, same day — must not double-send
+
+    assert len(calls) == 1
+
+
+def test_notify_new_nudges_is_a_no_op_when_unconfigured(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from command_center import app as app_module
+
+    monkeypatch.setattr(app_module.notify, "NTFY_TOPIC", "")
+    calls = []
+    monkeypatch.setattr(app_module.notify, "send", lambda *a, **k: calls.append(a) or True)
+
+    app_module._notify_new_nudges()
+
+    assert calls == []
 
 
 def test_settings_page_has_export_links(client: TestClient) -> None:

@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from command_center import auth, fixtures, nudges, pipeline, queries, setup_wizard, triage_rules
+from command_center import auth, fixtures, notify, nudges, pipeline, queries, setup_wizard, triage_rules
 from command_center.assistant import ingest as assistant_ingest
 from command_center.assistant.router import router as assistant_router
 from command_center.finances.router import router as finances_router
@@ -48,6 +48,33 @@ COORDINATOR_INTERVAL_MINUTES = 5
 _scheduler: BackgroundScheduler | None = None
 
 
+_NUDGE_PRIORITY = {"stale_urgent": "high", "overdue_tasks": "high", "no_pull_today": "default"}
+
+
+def _notify_new_nudges() -> None:
+    """Pushes any currently-active nudge (see nudges.py) via ntfy that
+    hasn't already been sent today — a no-op entirely if NTFY_TOPIC
+    isn't set. Runs on the same 5-minute tick as the source pulls, not
+    on page load, so it fires once in the background even if nobody
+    opens the brief that day; was_nudge_notified_today's per-id,
+    per-day dedup is what keeps a still-unresolved nudge from spamming
+    every tick.
+    """
+    if not notify.is_configured():
+        return
+    today = datetime.now(TZ).date().isoformat()
+    for nudge in nudges.compute_nudges(today):
+        if queries.was_nudge_notified_today(nudge["id"], today):
+            continue
+        sent = notify.send(
+            "Daily Command Center",
+            nudge["message"],
+            priority=_NUDGE_PRIORITY.get(nudge["id"], "default"),
+        )
+        if sent:
+            queries.mark_nudge_notified(nudge["id"], today)
+
+
 def _coordinator_tick() -> None:
     now = datetime.now(TZ)
     for cfg in queries.list_source_configs():
@@ -64,6 +91,10 @@ def _coordinator_tick() -> None:
             pipeline.run_source(cfg["source_name"])
         except Exception:
             logger.exception("Scheduled pull failed for source %s", cfg["source_name"])
+    try:
+        _notify_new_nudges()
+    except Exception:
+        logger.exception("Nudge notification check failed")
 
 
 @asynccontextmanager
@@ -478,8 +509,23 @@ def settings_page(request: Request):
             "assistant_last_indexed_at": index_status["last_indexed_at"],
             "assistant_chunk_count": index_status["chunk_count"],
             "health": health,
+            "notify_configured": notify.is_configured(),
         },
     )
+
+
+@app.post("/settings/notifications/test")
+def send_test_notification():
+    # Bypasses the once-a-day dedup deliberately — a test send needs an
+    # immediate result every time it's clicked, not "already sent today."
+    sent = notify.send("Daily Command Center", "Test notification from Settings.")
+    if not sent:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not reach ntfy — check NTFY_TOPIC/NTFY_SERVER in .env." if notify.is_configured()
+            else "NTFY_TOPIC isn't set in .env.",
+        )
+    return {"ok": True}
 
 
 @app.get("/settings/activity")
