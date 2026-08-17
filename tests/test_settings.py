@@ -43,6 +43,74 @@ def test_settings_page_includes_tooltip_toggle(client: TestClient) -> None:
     response = client.get("/settings")
     assert response.status_code == 200
     assert "Show icon labels on hover" in response.text
+
+
+# --- system health --------------------------------------------------------
+
+
+def test_health_endpoint_returns_expected_keys(client: TestClient) -> None:
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["google_connected"] is False
+    assert "triage_provider" in data
+    assert data["degraded_today"] == []
+    assert len(data["sources"]) == 4
+    assert "assistant_index" in data
+
+
+def test_health_endpoint_reports_degraded_when_a_source_failed_today(
+    client: TestClient,
+) -> None:
+    from datetime import datetime
+
+    from command_center.config import TZ
+
+    today = datetime.now(TZ).date().isoformat()
+    queries.save_triage_results(
+        brief_date=today,
+        triaged_items=[],
+        calendar_events=[],
+        degraded_sources=["gmail"],
+        sources_attempted=["gmail"],
+        force=False,
+    )
+
+    response = client.get("/health")
+
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert data["degraded_today"] == ["gmail"]
+
+
+def test_settings_page_shows_system_status_card(client: TestClient) -> None:
+    response = client.get("/settings")
+    assert response.status_code == 200
+    assert "System status" in response.text
+    assert "Not connected" in response.text  # has_valid_credentials is False in this fixture
+
+
+def test_settings_page_shows_degraded_badge_on_the_affected_source(
+    client: TestClient,
+) -> None:
+    from datetime import datetime
+
+    from command_center.config import TZ
+
+    today = datetime.now(TZ).date().isoformat()
+    queries.save_triage_results(
+        brief_date=today,
+        triaged_items=[],
+        calendar_events=[],
+        degraded_sources=["gmail"],
+        sources_attempted=["gmail"],
+        force=False,
+    )
+
+    response = client.get("/settings")
+
+    assert "Degraded today" in response.text
     assert "tooltipsEnabled" in response.text
 
 
