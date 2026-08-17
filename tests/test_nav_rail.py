@@ -163,3 +163,29 @@ def test_finances_is_active_on_finances_page(client: TestClient) -> None:
     response = client.get("/finances")
     assert response.status_code == 200
     assert response.text.count("bg-[#faece7]") == 1
+
+
+# --- command palette -----------------------------------------------------------
+
+
+def test_command_palette_renders_on_every_page(client: TestClient) -> None:
+    for path in ("/brief", "/settings", "/finances"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert "commandPalette()" in response.text
+        assert "Jump to..." in response.text
+
+
+def test_command_palette_listens_for_cmd_or_ctrl_k(client: TestClient) -> None:
+    response = client.get("/brief")
+    assert "e.metaKey || e.ctrlKey" in response.text
+    assert "'k'" in response.text
+
+
+def test_command_palette_covers_every_nav_rail_destination(client: TestClient) -> None:
+    # Anywhere reachable from the nav rail should also be reachable from
+    # the palette — otherwise it's a keyboard shortcut to a subset of
+    # the app, which defeats the point.
+    response = client.get("/brief")
+    for href in ("/brief", "/projects", "/schedule", "/history", "/history/report", "/finances", "/settings"):
+        assert f"href: '{href}'" in response.text
