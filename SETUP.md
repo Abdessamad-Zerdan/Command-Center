@@ -110,6 +110,10 @@ app will keep redirecting you to `/setup` until it's filled in (see
 make auth
 ```
 
+*(No `make` on Windows? Run `uv run python -m command_center.auth`
+instead — same thing, `make auth` is just a shortcut for it. Works
+as-is in PowerShell, cmd.exe, or Git Bash.)*
+
 Opens a browser for the Google consent flow, then writes
 `secrets/google_token.json` (also gitignored). Re-run this any time you
 change `GOOGLE_SCOPES` in `config.py` or the token stops refreshing.
@@ -120,6 +124,9 @@ Skip this if you skipped step 4 — the app runs fine without it.
 ```bash
 make run
 ```
+
+*(No `make`? Run `uv run uvicorn command_center.app:app --reload --port 8000`
+instead.)*
 
 Visit `http://localhost:8000` — the portfolio/landing page. Visit
 `/brief` for the daily dashboard, `/settings` to configure per-source
