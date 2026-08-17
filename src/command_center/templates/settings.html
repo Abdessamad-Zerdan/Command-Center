@@ -98,6 +98,39 @@
       </div>
     </div>
 
+    <div
+      x-data="{ sending: false, result: '' }"
+      class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between"
+    >
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Notifications</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          {% if notify_configured %}
+          ntfy configured — nudges push in the background, once a day each.
+          {% else %}
+          Not configured — set NTFY_TOPIC in .env to push nudges outside the app.
+          {% endif %}
+        </div>
+        <p x-show="result" x-text="result" class="text-xs mt-1" :class="result.startsWith('Sent') ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'"></p>
+      </div>
+      <button
+        type="button"
+        :disabled="sending"
+        @click="
+          sending = true; result = '';
+          fetch('/settings/notifications/test', { method: 'POST' }).then(async r => {
+            sending = false;
+            if (r.ok) { result = 'Sent — check your ntfy app.'; }
+            else { const data = await r.json(); result = data.detail || 'Could not send.'; }
+          });
+        "
+        class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 font-medium whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <span x-show="!sending">Send test notification</span>
+        <span x-show="sending">Sending…</span>
+      </button>
+    </div>
+
     <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
       <div class="min-w-0">
         <div class="font-serif text-base text-stone-900 dark:text-stone-100">Lane labels</div>

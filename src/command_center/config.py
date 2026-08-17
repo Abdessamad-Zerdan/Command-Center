@@ -104,3 +104,10 @@ GROQ_API_KEY_BACKUP_2 = os.environ.get("GROQ_API_KEY_BACKUP_2")
 MEDIUM_API_KEY = os.environ.get("MEDIUM_API_KEY")
 MEDIUM_USERNAME = os.environ.get("MEDIUM_USERNAME")
 MEDIUM_USER_ID_CACHE = SECRETS_DIR / "medium_user_id.json"
+
+# ntfy.sh (or a self-hosted ntfy server) push notifications for the
+# nudges already shown in-app (stale urgent items, overdue tasks, a
+# source that hasn't pulled today) — unset NTFY_TOPIC disables the
+# feature entirely, no account or API key required otherwise.
+NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh")
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
