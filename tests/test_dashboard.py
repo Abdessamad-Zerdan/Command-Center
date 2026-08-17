@@ -105,6 +105,56 @@ def test_mark_done_removes_item_and_persists(client: TestClient) -> None:
     assert status == "done"
 
 
+def _seed_past_item(brief_date: str, lane: str, title: str) -> int:
+    with db.session() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO briefs (brief_date, generated_at, degraded_lanes) VALUES (?, ?, '[]')",
+            (brief_date, "2026-08-10T10:00:00"),
+        )
+        cursor = conn.execute(
+            "INSERT INTO items (brief_date, lane, source, source_id, title, why_it_matters, "
+            "suggested_next_step, priority, deep_link, status, created_at) "
+            "VALUES (?, ?, 'google_tasks', ?, ?, '', '', 2, '', 'pending', ?)",
+            (brief_date, lane, f"src-{title}", title, "2026-08-10T10:00:00"),
+        )
+        return cursor.lastrowid
+
+
+def test_move_item_to_today_route_moves_it_off_history_and_onto_todays_brief(
+    client: TestClient,
+) -> None:
+    item_id = _seed_past_item("2026-08-10", "action_items", "Old task from history")
+
+    response = client.post(f"/items/{item_id}/move-to-today")
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    history = client.get("/history/2026-08-10")
+    assert "Old task from history" not in history.text
+
+    today = datetime.now(TZ).date().isoformat()
+    with db.session() as conn:
+        row = conn.execute("SELECT brief_date, status FROM items WHERE id = ?", (item_id,)).fetchone()
+    assert row["brief_date"] == today
+    assert row["status"] == "pending"
+
+
+def test_move_item_to_today_route_404s_for_unknown_item(client: TestClient) -> None:
+    response = client.post("/items/999999/move-to-today")
+    assert response.status_code == 404
+
+
+def test_history_item_card_shows_bring_to_today_button(client: TestClient) -> None:
+    _seed_past_item("2026-08-10", "action_items", "Old task from history")
+    response = client.get("/history/2026-08-10")
+    assert "Bring to today" in response.text
+
+
+def test_todays_brief_does_not_show_bring_to_today_button(client: TestClient) -> None:
+    response = client.get("/brief")
+    assert "Bring to today" not in response.text
+
+
 def test_history_lists_today(client: TestClient) -> None:
     response = client.get("/history")
     assert response.status_code == 200

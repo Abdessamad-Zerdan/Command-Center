@@ -152,6 +152,107 @@ def test_update_item_from_task_unknown_source_id_logs_nothing(isolated_db: None)
     assert _events() == []
 
 
+# --- move_item_to_date ---------------------------------------------------
+
+
+def test_move_item_to_date_updates_brief_date_and_resets_status(isolated_db: None) -> None:
+    item_id = _seed_item("2026-08-14", "action_items", "google_tasks", "gt3", "Old task")
+    queries.set_item_status(item_id, "done")
+
+    moved = queries.move_item_to_date(item_id, "2026-08-17")
+
+    assert moved is True
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+    assert row["brief_date"] == "2026-08-17"
+    assert row["status"] == "pending"
+    assert row["lane"] == "action_items"  # unchanged, no lane override passed
+
+
+def test_move_item_to_date_can_change_lane_too(isolated_db: None) -> None:
+    item_id = _seed_item("2026-08-14", "action_items", "google_tasks", "gt4", "Old task")
+
+    queries.move_item_to_date(item_id, "2026-08-17", lane="tasks_due")
+
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+    assert row["lane"] == "tasks_due"
+
+
+def test_move_item_to_date_creates_target_brief_row_if_missing(isolated_db: None) -> None:
+    item_id = _seed_item("2026-08-14", "action_items", "google_tasks", "gt5", "Old task")
+
+    queries.move_item_to_date(item_id, "2026-09-01")
+
+    with db.session() as conn:
+        row = conn.execute("SELECT * FROM briefs WHERE brief_date = ?", ("2026-09-01",)).fetchone()
+    assert row is not None
+
+
+def test_move_item_to_date_logs_moved_event(isolated_db: None) -> None:
+    item_id = _seed_item("2026-08-14", "action_items", "google_tasks", "gt6", "Old task")
+
+    queries.move_item_to_date(item_id, "2026-08-17")
+
+    events = _events(item_id)
+    assert events[-1]["event_type"] == "moved"
+    import json
+
+    meta = json.loads(events[-1]["metadata_json"])
+    assert meta["to_date"] == "2026-08-17"
+
+
+def test_move_item_to_date_returns_false_for_unknown_item(isolated_db: None) -> None:
+    moved = queries.move_item_to_date(99999, "2026-08-17")
+    assert moved is False
+    assert _events(99999) == []
+
+
+# --- list_recent_pending_items --------------------------------------------
+
+
+def test_list_recent_pending_items_includes_items_in_window(isolated_db: None) -> None:
+    _seed_item("2026-08-16", "action_items", "gmail", "r1", "Yesterday's item")
+
+    items = queries.list_recent_pending_items("2026-08-17", days=7)
+
+    assert [i["title"] for i in items] == ["Yesterday's item"]
+
+
+def test_list_recent_pending_items_excludes_before_date_itself(isolated_db: None) -> None:
+    _seed_item("2026-08-17", "action_items", "gmail", "r2", "Today's item")
+
+    items = queries.list_recent_pending_items("2026-08-17", days=7)
+
+    assert items == []
+
+
+def test_list_recent_pending_items_excludes_outside_the_window(isolated_db: None) -> None:
+    _seed_item("2026-08-01", "action_items", "gmail", "r3", "Too old")
+
+    items = queries.list_recent_pending_items("2026-08-17", days=7)
+
+    assert items == []
+
+
+def test_list_recent_pending_items_excludes_non_pending_status(isolated_db: None) -> None:
+    item_id = _seed_item("2026-08-16", "action_items", "gmail", "r4", "Already done")
+    queries.set_item_status(item_id, "done")
+
+    items = queries.list_recent_pending_items("2026-08-17", days=7)
+
+    assert items == []
+
+
+def test_list_recent_pending_items_orders_newest_day_first(isolated_db: None) -> None:
+    _seed_item("2026-08-14", "action_items", "gmail", "r5", "Older")
+    _seed_item("2026-08-16", "action_items", "gmail", "r6", "Newer")
+
+    items = queries.list_recent_pending_items("2026-08-17", days=7)
+
+    assert [i["title"] for i in items] == ["Newer", "Older"]
+
+
 # --- save_triage_results -------------------------------------------------
 
 

@@ -246,6 +246,14 @@ def mark_snoozed(item_id: int):
     return {"ok": True}
 
 
+@app.post("/items/{item_id}/move-to-today")
+def move_item_to_today(item_id: int):
+    moved = queries.move_item_to_date(item_id, _today())
+    if not moved:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"ok": True}
+
+
 @app.post("/rerun")
 def rerun():
     if auth.has_valid_credentials():
