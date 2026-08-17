@@ -75,7 +75,12 @@ GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 
 GOOGLE_SCOPES = (
     "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.readonly",
+    # calendar.events (not calendar.readonly) — write access to events
+    # specifically, for the "Add to Calendar" button, without the full
+    # `calendar` scope's calendar-management rights this app never
+    # needs. A token issued under the old readonly scope can't silently
+    # gain this — re-consent through the OAuth screen is required once.
+    "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/tasks",
 )
 

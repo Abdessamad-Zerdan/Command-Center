@@ -26,6 +26,8 @@
       projectId: "",
       savedProjectId: "",
       projectError: "",
+      addingToCalendar: false,
+      calendarError: "",
       onOpen(item) {
         this.item = item;
         this.editing = false;
@@ -33,6 +35,22 @@
         this.projectId = item.project_id || "";
         this.savedProjectId = this.projectId;
         this.projectError = "";
+        this.addingToCalendar = false;
+        this.calendarError = "";
+      },
+      addToCalendar() {
+        this.addingToCalendar = true;
+        this.calendarError = "";
+        fetch(`/items/${this.item.id}/add-to-calendar`, { method: "POST" }).then(async (r) => {
+          this.addingToCalendar = false;
+          const data = await r.json();
+          if (r.ok) {
+            this.item.calendar_event_id = "pending"; // any truthy value — real id not needed client-side
+            this.item.calendar_link = data.link;
+          } else {
+            this.calendarError = data.detail || "Could not add to calendar.";
+          }
+        });
       },
       saveProject() {
         this.projectError = "";
@@ -235,6 +253,24 @@
           <p class="mt-2 text-[15px] text-stone-700 dark:text-stone-300 leading-[1.4]">
             <span class="text-stone-500 dark:text-stone-400">Next:</span> <span x-text="item.suggested_next_step"></span>
           </p>
+        </template>
+
+        <template x-if="item.calendar_event_id">
+          <a :href="item.calendar_link" target="_blank" rel="noopener" class="mt-3 inline-block text-xs text-rust dark:text-rust-light hover:text-[#9c4830] dark:hover:text-[#e08761]">View in Calendar &#8599;</a>
+        </template>
+        <template x-if="!item.calendar_event_id && item.source !== 'calendar' && (item.due_date || item.scheduled_start)">
+          <div class="mt-3">
+            <button
+              type="button"
+              :disabled="addingToCalendar"
+              @click="addToCalendar()"
+              class="text-xs px-2.5 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 disabled:opacity-50"
+            >
+              <span x-show="!addingToCalendar">Add to Calendar</span>
+              <span x-show="addingToCalendar">Adding…</span>
+            </button>
+            <p x-show="calendarError" x-text="calendarError" class="text-xs text-red-600 dark:text-red-400 mt-1"></p>
+          </div>
         </template>
 
         <div class="mt-5 flex items-center justify-between gap-2">

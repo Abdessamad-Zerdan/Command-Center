@@ -103,9 +103,16 @@ class _FakeExecutable:
 class _FakeEvents:
     def __init__(self, items: list[dict]) -> None:
         self._items = items
+        self.inserted: list[dict] = []
 
     def list(self, **kwargs) -> _FakeExecutable:
         return _FakeExecutable({"items": self._items})
+
+    def insert(self, calendarId: str, body: dict) -> _FakeExecutable:
+        self.inserted.append({"calendarId": calendarId, "body": body})
+        return _FakeExecutable(
+            {"id": "new-event-1", "htmlLink": "https://calendar.google.com/event?eid=abc"}
+        )
 
 
 class _FakeCalendarService:
@@ -171,3 +178,46 @@ def test_fetch_delegates_to_fetch_with_events_and_returns_only_raw_items() -> No
     source._service = _FakeCalendarService([])
 
     assert source.fetch() == []
+
+
+# --- create_event -----------------------------------------------------------
+
+
+def test_create_event_inserts_on_the_primary_calendar() -> None:
+    source = CalendarSource.__new__(CalendarSource)
+    source._service = _FakeCalendarService([])
+
+    event = source.create_event(
+        "Renew passport", {"date": "2026-08-21"}, {"date": "2026-08-22"}
+    )
+
+    assert event == {"id": "new-event-1", "htmlLink": "https://calendar.google.com/event?eid=abc"}
+    inserted = source._service._events.inserted[0]
+    assert inserted["calendarId"] == "primary"
+    assert inserted["body"]["summary"] == "Renew passport"
+    assert inserted["body"]["start"] == {"date": "2026-08-21"}
+    assert inserted["body"]["end"] == {"date": "2026-08-22"}
+    assert "description" not in inserted["body"]
+
+
+def test_create_event_includes_description_when_given() -> None:
+    source = CalendarSource.__new__(CalendarSource)
+    source._service = _FakeCalendarService([])
+
+    source.create_event("X", {"date": "2026-08-21"}, {"date": "2026-08-22"}, description="Notes here")
+
+    inserted = source._service._events.inserted[0]
+    assert inserted["body"]["description"] == "Notes here"
+
+
+def test_create_event_passes_through_timed_start_and_end() -> None:
+    source = CalendarSource.__new__(CalendarSource)
+    source._service = _FakeCalendarService([])
+
+    start = {"dateTime": "2026-08-21T10:00:00+03:00", "timeZone": "Europe/Istanbul"}
+    end = {"dateTime": "2026-08-21T10:30:00+03:00", "timeZone": "Europe/Istanbul"}
+    source.create_event("Standup", start, end)
+
+    inserted = source._service._events.inserted[0]
+    assert inserted["body"]["start"] == start
+    assert inserted["body"]["end"] == end
