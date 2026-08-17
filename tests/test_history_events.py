@@ -213,6 +213,47 @@ def test_reorder_item_handles_repeated_reorders_correctly(isolated_db: None) -> 
     assert [r["id"] for r in rows] == [c, b, a]
 
 
+# --- calendar write-back -----------------------------------------------------
+
+
+def test_get_item_for_calendar_returns_relevant_fields(isolated_db: None) -> None:
+    item_id = queries.create_manual_item("2026-08-14", "urgent", "Book flight", due_date="2026-08-21")
+
+    item = queries.get_item_for_calendar(item_id)
+
+    assert item["title"] == "Book flight"
+    assert item["due_date"] == "2026-08-21"
+    assert item["calendar_event_id"] is None
+
+
+def test_get_item_for_calendar_returns_none_for_unknown_item(isolated_db: None) -> None:
+    assert queries.get_item_for_calendar(99999) is None
+
+
+def test_set_item_calendar_event_stores_id_and_link(isolated_db: None) -> None:
+    item_id = queries.create_manual_item("2026-08-14", "urgent", "Book flight")
+
+    updated = queries.set_item_calendar_event(item_id, "evt-1", "https://calendar.google.com/evt-1")
+
+    assert updated is True
+    item = queries.get_item_for_calendar(item_id)
+    assert item["calendar_event_id"] == "evt-1"
+    assert item["calendar_link"] == "https://calendar.google.com/evt-1"
+
+
+def test_set_item_calendar_event_logs_an_event(isolated_db: None) -> None:
+    item_id = queries.create_manual_item("2026-08-14", "urgent", "Book flight")
+
+    queries.set_item_calendar_event(item_id, "evt-1", "https://calendar.google.com/evt-1")
+
+    events = _events(item_id)
+    assert [e["event_type"] for e in events] == ["created", "updated"]
+
+
+def test_set_item_calendar_event_returns_false_for_unknown_item(isolated_db: None) -> None:
+    assert queries.set_item_calendar_event(99999, "evt-1", "https://x") is False
+
+
 # --- triage_rules CRUD ------------------------------------------------------
 
 

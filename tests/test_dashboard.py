@@ -579,3 +579,10 @@ def test_dashboard_shows_priority_group_headers_only_when_mixed(client: TestClie
     assert "Low priority" in dashboard.text
     # tasks_due fixture data has priority 2 and priority 3 — also mixed.
     assert "Medium priority" in dashboard.text
+
+
+def test_dashboard_wires_up_the_add_to_calendar_button(client: TestClient) -> None:
+    response = client.get("/brief")
+    assert "/add-to-calendar" in response.text
+    assert "Add to Calendar" in response.text
+    assert "View in Calendar" in response.text

@@ -12,9 +12,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from googleapiclient.errors import HttpError
 from pydantic import BaseModel
 
 from command_center import auth, fixtures, notify, nudges, pipeline, queries, setup_wizard, triage_rules
+from command_center.sources.calendar import CalendarSource
 from command_center.assistant import ingest as assistant_ingest
 from command_center.assistant.router import router as assistant_router
 from command_center.finances.router import router as finances_router
@@ -462,6 +464,50 @@ def update_item_project(item_id: int, payload: ItemProjectIn):
     if not updated:
         raise HTTPException(status_code=404, detail="Item not found")
     return {"ok": True}
+
+
+@app.post("/items/{item_id}/add-to-calendar")
+def add_item_to_calendar(item_id: int):
+    item = queries.get_item_for_calendar(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if item["calendar_event_id"]:
+        # Already added — idempotent, just hand back the existing link
+        # rather than creating a duplicate event on a second click.
+        return {"ok": True, "link": item["calendar_link"]}
+    if item["source"] == "calendar":
+        raise HTTPException(status_code=400, detail="This item already is a calendar event")
+
+    if item["scheduled_start"] and item["scheduled_end"]:
+        start = {"dateTime": item["scheduled_start"], "timeZone": str(TZ)}
+        end = {"dateTime": item["scheduled_end"], "timeZone": str(TZ)}
+    elif item["due_date"]:
+        start = {"date": item["due_date"]}
+        end = {"date": (datetime.fromisoformat(item["due_date"]) + timedelta(days=1)).date().isoformat()}
+    else:
+        raise HTTPException(
+            status_code=400, detail="This item has no due date or scheduled time to add"
+        )
+
+    if not auth.has_valid_credentials():
+        raise HTTPException(status_code=400, detail="Google isn't connected")
+    try:
+        credentials = auth.get_google_credentials()
+        event = CalendarSource(credentials).create_event(item["title"], start, end)
+    except auth.AuthNotConfigured as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HttpError as exc:
+        if exc.resp.status == 403:
+            raise HTTPException(
+                status_code=403,
+                detail="Google Calendar rejected this — your saved connection likely predates "
+                "write access. Reconnect Google (see SETUP.md) to grant it.",
+            ) from exc
+        raise HTTPException(status_code=502, detail=f"Google Calendar request failed: {exc}") from exc
+
+    link = event.get("htmlLink", "")
+    queries.set_item_calendar_event(item_id, event["id"], link)
+    return {"ok": True, "link": link}
 
 
 class ItemReorderIn(BaseModel):

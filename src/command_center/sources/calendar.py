@@ -118,3 +118,21 @@ class CalendarSource:
     def fetch(self) -> list[RawItem]:
         raw_items, _ = self.fetch_with_events()
         return raw_items
+
+    def create_event(
+        self, title: str, start: dict, end: dict, description: str = ""
+    ) -> dict:
+        """Creates a real event on the primary calendar. `start`/`end`
+        are the Calendar API's own shape — {"dateTime": iso, "timeZone":
+        tz_name} for a timed event, {"date": "YYYY-MM-DD"} for an
+        all-day one — callers build whichever fits what they know about
+        the item (see app.py's add-to-calendar route). Requires the
+        calendar.events OAuth scope, not just calendar.readonly; raises
+        googleapiclient.errors.HttpError (403) untouched if the saved
+        token predates that scope — the caller maps that to an
+        actionable re-auth message rather than a raw traceback.
+        """
+        body = {"summary": title, "start": start, "end": end}
+        if description:
+            body["description"] = description
+        return self._service.events().insert(calendarId="primary", body=body).execute()

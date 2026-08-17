@@ -688,6 +688,39 @@ def update_item_project(item_id: int, project_id: int | None) -> bool:
         return updated
 
 
+def get_item_for_calendar(item_id: int) -> dict[str, Any] | None:
+    with session() as conn:
+        row = conn.execute(
+            "SELECT id, title, source, due_date, scheduled_start, scheduled_end, "
+            "calendar_event_id, calendar_link FROM items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def set_item_calendar_event(item_id: int, event_id: str, link: str) -> bool:
+    """Records a real Google Calendar event created for this item — a
+    non-empty calendar_event_id is what the UI checks to switch the
+    "Add to Calendar" button to a "View in Calendar" link instead."""
+    with session() as conn:
+        row = conn.execute("SELECT lane, source, title FROM items WHERE id = ?", (item_id,)).fetchone()
+        cursor = conn.execute(
+            "UPDATE items SET calendar_event_id = ?, calendar_link = ? WHERE id = ?",
+            (event_id, link, item_id),
+        )
+        updated = cursor.rowcount > 0
+        if updated and row is not None:
+            log_task_event(
+                item_id, "updated",
+                metadata={
+                    "lane": row["lane"], "source": row["source"], "title": row["title"],
+                    "calendar_event_id": event_id,
+                },
+                conn=conn,
+            )
+        return updated
+
+
 def list_items_by_project(project_id: int) -> list[dict[str, Any]]:
     with session() as conn:
         rows = conn.execute(
