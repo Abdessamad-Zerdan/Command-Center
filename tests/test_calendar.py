@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from command_center.config import TZ
 from command_center.sources.calendar import (
@@ -11,8 +11,13 @@ from command_center.sources.calendar import (
 
 
 def test_parse_event_time_handles_tz_aware_value() -> None:
+    # Computed against TZ rather than hardcoded to a specific offset —
+    # this must hold regardless of what APP_TIMEZONE the environment
+    # running the test actually has set (e.g. a fresh CI checkout with
+    # no .env defaults to UTC, not this dev machine's Europe/Istanbul).
     dt = _parse_event_time("2026-08-16T10:00:00+03:00")
-    assert dt == datetime(2026, 8, 16, 10, 0, tzinfo=TZ)
+    expected = datetime(2026, 8, 16, 10, 0, tzinfo=timezone(timedelta(hours=3))).astimezone(TZ)
+    assert dt == expected
 
 
 def test_parse_event_time_assumes_app_timezone_when_naive() -> None:
