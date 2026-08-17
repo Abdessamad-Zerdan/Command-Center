@@ -93,6 +93,37 @@ def test_create_manual_item_logs_created_event(isolated_db: None) -> None:
     assert meta == {"lane": "urgent", "source": "manual", "title": "Renew passport"}
 
 
+# --- list_tool_calls / list_task_events ------------------------------------
+
+
+def test_list_tool_calls_returns_newest_first(isolated_db: None) -> None:
+    queries.log_tool_call("create_task", {"title": "A"}, "confirmed")
+    queries.log_tool_call("complete_task", {"task_id": "t1"}, "confirmed")
+
+    rows = queries.list_tool_calls()
+
+    assert [r["tool"] for r in rows] == ["complete_task", "create_task"]
+
+
+def test_list_tool_calls_respects_limit(isolated_db: None) -> None:
+    for i in range(3):
+        queries.log_tool_call("create_task", {"title": str(i)}, "confirmed")
+
+    rows = queries.list_tool_calls(limit=2)
+
+    assert len(rows) == 2
+
+
+def test_list_task_events_returns_newest_first(isolated_db: None) -> None:
+    item_id = _seed_item("2026-08-14", "urgent", "gmail", "g1", "Fix the thing")
+    queries.set_item_status(item_id, "snoozed", snoozed_until="2026-08-15T00:00:00")
+    queries.set_item_status(item_id, "done")
+
+    rows = queries.list_task_events()
+
+    assert [r["event_type"] for r in rows] == ["completed", "snoozed"]
+
+
 # --- create_synced_task_item ---------------------------------------------
 
 

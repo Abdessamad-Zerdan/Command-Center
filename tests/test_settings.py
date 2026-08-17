@@ -91,6 +91,39 @@ def test_settings_page_shows_system_status_card(client: TestClient) -> None:
     assert "Not connected" in response.text  # has_valid_credentials is False in this fixture
 
 
+def test_settings_page_links_to_activity(client: TestClient) -> None:
+    response = client.get("/settings")
+    assert response.status_code == 200
+    assert 'href="/settings/activity"' in response.text
+
+
+def test_activity_page_empty_state(client: TestClient) -> None:
+    response = client.get("/settings/activity")
+    assert response.status_code == 200
+    assert "No tool calls yet." in response.text
+    assert "No item activity yet." in response.text
+
+
+def test_activity_page_shows_tool_call_and_status(client: TestClient) -> None:
+    queries.log_tool_call("create_task", {"title": "Renew passport"}, "confirmed")
+
+    response = client.get("/settings/activity")
+
+    assert "create_task" in response.text
+    assert "Renew passport" in response.text
+    assert "confirmed" in response.text
+
+
+def test_activity_page_shows_item_history_event(client: TestClient) -> None:
+    item_id = queries.create_manual_item("2026-08-17", "urgent", "Fix the thing")
+    queries.set_item_status(item_id, "done")
+
+    response = client.get("/settings/activity")
+
+    assert "Fix the thing" in response.text
+    assert "completed" in response.text
+
+
 def test_settings_page_shows_degraded_badge_on_the_affected_source(
     client: TestClient,
 ) -> None:

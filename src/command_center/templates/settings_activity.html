@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Activity{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Activity</h1>
+    <a href="/settings" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to settings</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div class="max-w-2xl space-y-4">
+
+    <div class="rounded-lg bg-stone-100 dark:bg-stone-800/50 p-4">
+      <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-2">Assistant tool calls</div>
+      {% if not tool_calls %}
+      <p class="text-xs text-stone-400 dark:text-stone-500 italic">No tool calls yet.</p>
+      {% endif %}
+      {% for call in tool_calls %}
+      {% set status_color = {
+        "confirmed": "text-green-700 dark:text-green-400",
+        "proposed": "text-amber-700 dark:text-amber-400",
+        "failed": "text-red-700 dark:text-red-400",
+        "cancelled": "text-stone-400 dark:text-stone-500",
+      }.get(call.status, "text-stone-400 dark:text-stone-500") %}
+      <div class="flex items-center justify-between gap-3 py-1.5 border-t border-stone-200 dark:border-stone-700 first:border-t-0 text-xs">
+        <div class="min-w-0">
+          <div class="text-stone-900 dark:text-stone-100 truncate">
+            {{ call.tool }}{% if call.args.title %} — {{ call.args.title }}{% endif %}
+          </div>
+          <div class="text-stone-500 dark:text-stone-400">{{ call.created_at[:16] }}</div>
+        </div>
+        <span class="shrink-0 {{ status_color }}">{{ call.status }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="rounded-lg bg-stone-100 dark:bg-stone-800/50 p-4">
+      <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-2">Item history</div>
+      {% if not task_events %}
+      <p class="text-xs text-stone-400 dark:text-stone-500 italic">No item activity yet.</p>
+      {% endif %}
+      {% for ev in task_events %}
+      <div class="flex items-center justify-between gap-3 py-1.5 border-t border-stone-200 dark:border-stone-700 first:border-t-0 text-xs">
+        <div class="min-w-0">
+          <div class="text-stone-900 dark:text-stone-100 truncate">{{ ev.metadata.title or ("item " ~ ev.task_id) }}</div>
+          <div class="text-stone-500 dark:text-stone-400">{{ ev.timestamp[:16] }}</div>
+        </div>
+        <span class="shrink-0 text-stone-700 dark:text-stone-300">{{ ev.event_type }}</span>
+      </div>
+      {% endfor %}
+    </div>
+
+  </div>
+</main>
+{% endblock %}
