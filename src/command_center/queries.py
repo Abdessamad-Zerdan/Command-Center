@@ -1035,3 +1035,28 @@ def mark_setup_invite_used(token: str, used_by_ip: str | None) -> None:
             "UPDATE setup_invites SET used_at = ?, used_by_ip = ? WHERE token = ?",
             (now, used_by_ip, token),
         )
+
+
+# --- data export --------------------------------------------------------------
+# Plain full-table dumps for Settings → Export data. No filtering, no
+# pagination — this is "your data, not the repo's" (same framing as the
+# gitignored files), meant to leave with you if you ever stop running
+# this instance, not a paginated API for routine use.
+
+
+def export_items() -> list[dict[str, Any]]:
+    with session() as conn:
+        rows = conn.execute("SELECT * FROM items ORDER BY brief_date ASC, id ASC").fetchall()
+        return [dict(row) for row in rows]
+
+
+def export_finance_entries() -> list[dict[str, Any]]:
+    with session() as conn:
+        rows = conn.execute("SELECT * FROM finance_entries ORDER BY entry_date ASC, id ASC").fetchall()
+        return [dict(row) for row in rows]
+
+
+def export_briefs() -> list[dict[str, Any]]:
+    with session() as conn:
+        rows = conn.execute("SELECT * FROM briefs ORDER BY brief_date ASC").fetchall()
+        return [dict(row) for row in rows]

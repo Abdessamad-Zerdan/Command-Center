@@ -1,3 +1,4 @@
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from command_center import auth, db, pipeline, queries
 from command_center.assistant import ingest as assistant_ingest
+from command_center.config import TZ
 from command_center.setup_wizard import status as setup_status
 
 
@@ -193,6 +195,61 @@ def test_delete_triage_rule_route(client: TestClient) -> None:
 def test_delete_triage_rule_route_404s_for_unknown_id(client: TestClient) -> None:
     response = client.delete("/settings/triage-rules/99999")
     assert response.status_code == 404
+
+
+def test_settings_page_has_export_links(client: TestClient) -> None:
+    response = client.get("/settings")
+    assert 'href="/settings/export.json"' in response.text
+    assert 'href="/settings/export/items.csv"' in response.text
+    assert 'href="/settings/export/finances.csv"' in response.text
+
+
+def test_export_json_includes_everything(client: TestClient) -> None:
+    today = datetime.now(TZ).date().isoformat()
+    queries.create_manual_item(today, "urgent", "Renew passport")
+    queries.create_finance_entry(42.5, "Food", "spend", today)
+
+    response = client.get("/settings/export.json")
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == "attachment; filename=command-center-export.json"
+    data = response.json()
+    assert "exported_at" in data
+    assert any(item["title"] == "Renew passport" for item in data["items"])
+    assert any(entry["category"] == "Food" for entry in data["finance_entries"])
+    assert any(brief["brief_date"] == today for brief in data["briefs"])
+
+
+def test_export_items_csv(client: TestClient) -> None:
+    today = datetime.now(TZ).date().isoformat()
+    queries.create_manual_item(today, "urgent", "Renew passport")
+
+    response = client.get("/settings/export/items.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["content-disposition"] == "attachment; filename=items.csv"
+    assert "Renew passport" in response.text
+    assert response.text.startswith("id,")
+
+
+def test_export_items_csv_empty_is_not_an_error(client: TestClient) -> None:
+    with db.session() as conn:
+        conn.execute("DELETE FROM items")
+    response = client.get("/settings/export/items.csv")
+    assert response.status_code == 200
+    assert response.text == ""
+
+
+def test_export_finances_csv(client: TestClient) -> None:
+    today = datetime.now(TZ).date().isoformat()
+    queries.create_finance_entry(42.5, "Food", "spend", today, note="Groceries")
+
+    response = client.get("/settings/export/finances.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == "attachment; filename=finances.csv"
+    assert "Groceries" in response.text
 
 
 def test_settings_page_shows_degraded_badge_on_the_affected_source(

@@ -80,6 +80,24 @@
       </a>
     </div>
 
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3">
+      <div class="font-serif text-base text-stone-900 dark:text-stone-100">Export data</div>
+      <div class="text-xs text-stone-500 dark:text-stone-400 mb-2">
+        Your data, not the repo's — download everything if you ever want to leave.
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a href="/settings/export.json" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Everything (JSON)
+        </a>
+        <a href="/settings/export/items.csv" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 font-medium whitespace-nowrap">
+          Items (CSV)
+        </a>
+        <a href="/settings/export/finances.csv" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 font-medium whitespace-nowrap">
+          Finances (CSV)
+        </a>
+      </div>
+    </div>
+
     <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
       <div class="min-w-0">
         <div class="font-serif text-base text-stone-900 dark:text-stone-100">Triage rules</div>
