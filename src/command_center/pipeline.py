@@ -7,7 +7,7 @@ import argparse
 import logging
 from datetime import datetime
 
-from command_center import queries, triage
+from command_center import queries, triage, triage_rules
 from command_center.auth import get_google_credentials
 from command_center.config import TZ
 from command_center.sources import RawItem
@@ -97,6 +97,15 @@ def run(force: bool = False) -> None:
     except Exception:
         logger.exception("Triage failed")
         degraded.append("triage")
+    else:
+        # Deliberately outside the try above — a rules bug must never
+        # discard an already-successful triage result and mark the
+        # whole lane degraded over it. Worst case here: this pull's
+        # items just don't get the rule override, not a failed pull.
+        try:
+            triage_rules.apply_rules(triaged, raw_items)
+        except Exception:
+            logger.exception("Applying triage rules failed")
 
     reading_items, medium_degraded = _fetch_medium()
     degraded += medium_degraded
@@ -149,6 +158,11 @@ def run_source(name: str) -> None:
             except Exception:
                 logger.exception("Triage failed for source %s", name)
                 degraded.append("triage")
+            else:
+                try:
+                    triage_rules.apply_rules(triaged, raw_items)
+                except Exception:
+                    logger.exception("Applying triage rules failed for source %s", name)
 
     queries.save_triage_results(
         brief_date=brief_date,

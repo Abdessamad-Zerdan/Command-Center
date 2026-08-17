@@ -691,6 +691,44 @@ def list_task_events(limit: int = 50) -> list[dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
+def list_triage_rules(enabled_only: bool = False) -> list[dict[str, Any]]:
+    """Oldest first — the order rules were created in is also the order
+    triage_rules.py applies them (first match wins), so this is the
+    order a user needs to see them in to understand which one would win
+    a conflict."""
+    with session() as conn:
+        sql = "SELECT * FROM triage_rules"
+        if enabled_only:
+            sql += " WHERE enabled = 1"
+        sql += " ORDER BY id ASC"
+        rows = conn.execute(sql).fetchall()
+        return [dict(row) for row in rows]
+
+
+def create_triage_rule(field: str, match_value: str, lane: str) -> int:
+    with session() as conn:
+        cursor = conn.execute(
+            "INSERT INTO triage_rules (field, match_value, lane, enabled, created_at) "
+            "VALUES (?, ?, ?, 1, ?)",
+            (field, match_value, lane, datetime.now(TZ).isoformat()),
+        )
+        return cursor.lastrowid
+
+
+def set_triage_rule_enabled(rule_id: int, enabled: bool) -> bool:
+    with session() as conn:
+        cursor = conn.execute(
+            "UPDATE triage_rules SET enabled = ? WHERE id = ?", (1 if enabled else 0, rule_id)
+        )
+        return cursor.rowcount > 0
+
+
+def delete_triage_rule(rule_id: int) -> bool:
+    with session() as conn:
+        cursor = conn.execute("DELETE FROM triage_rules WHERE id = ?", (rule_id,))
+        return cursor.rowcount > 0
+
+
 _DEFAULT_APP_SETTINGS = {"day_bounds_start": "07:00", "day_bounds_end": "22:00"}
 
 

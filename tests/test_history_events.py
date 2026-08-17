@@ -195,6 +195,46 @@ def test_reorder_item_handles_repeated_reorders_correctly(isolated_db: None) -> 
     assert [r["id"] for r in rows] == [c, b, a]
 
 
+# --- triage_rules CRUD ------------------------------------------------------
+
+
+def test_create_and_list_triage_rules(isolated_db: None) -> None:
+    queries.create_triage_rule("title", "server down", "urgent")
+    queries.create_triage_rule("sender", "boss@example.com", "urgent")
+
+    rules = queries.list_triage_rules()
+
+    assert [r["field"] for r in rules] == ["title", "sender"]
+    assert all(r["enabled"] == 1 for r in rules)
+
+
+def test_list_triage_rules_enabled_only(isolated_db: None) -> None:
+    rule_id = queries.create_triage_rule("title", "x", "urgent")
+    queries.create_triage_rule("title", "y", "urgent")
+    queries.set_triage_rule_enabled(rule_id, False)
+
+    rules = queries.list_triage_rules(enabled_only=True)
+
+    assert [r["match_value"] for r in rules] == ["y"]
+
+
+def test_set_triage_rule_enabled_returns_false_for_unknown_id(isolated_db: None) -> None:
+    assert queries.set_triage_rule_enabled(99999, False) is False
+
+
+def test_delete_triage_rule(isolated_db: None) -> None:
+    rule_id = queries.create_triage_rule("title", "x", "urgent")
+
+    deleted = queries.delete_triage_rule(rule_id)
+
+    assert deleted is True
+    assert queries.list_triage_rules() == []
+
+
+def test_delete_triage_rule_returns_false_for_unknown_id(isolated_db: None) -> None:
+    assert queries.delete_triage_rule(99999) is False
+
+
 # --- create_synced_task_item ---------------------------------------------
 
 

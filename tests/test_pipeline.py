@@ -102,6 +102,51 @@ def test_pipeline_saves_triaged_items(
     assert "Test subject" in titles
 
 
+def test_pipeline_applies_triage_rules_after_triage(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    queries.create_triage_rule("title", "test subject", "urgent")
+    monkeypatch.setattr(pipeline, "get_google_credentials", lambda: object())
+    monkeypatch.setattr(pipeline, "GmailSource", _FakeGmailOK)
+    monkeypatch.setattr(pipeline, "CalendarSource", _FakeCalendarEmpty)
+    monkeypatch.setattr(pipeline, "TasksSource", _FakeTasksEmpty)
+    monkeypatch.setattr(pipeline.medium, "fetch_and_rank", lambda: [])
+    # _fake_triage_run always classifies into action_items — the rule
+    # above overrides that to urgent, proving apply_rules runs after it.
+    monkeypatch.setattr(pipeline.triage, "run", _fake_triage_run)
+
+    pipeline.run()
+
+    brief = queries.get_brief(_today())
+    urgent_titles = [item["title"] for item in brief["lanes"]["urgent"]]
+    action_titles = [item["title"] for item in brief["lanes"]["action_items"]]
+    assert "Test subject" in urgent_titles
+    assert "Test subject" not in action_titles
+
+
+def test_pipeline_a_broken_rule_does_not_discard_a_successful_triage(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pipeline, "get_google_credentials", lambda: object())
+    monkeypatch.setattr(pipeline, "GmailSource", _FakeGmailOK)
+    monkeypatch.setattr(pipeline, "CalendarSource", _FakeCalendarEmpty)
+    monkeypatch.setattr(pipeline, "TasksSource", _FakeTasksEmpty)
+    monkeypatch.setattr(pipeline.medium, "fetch_and_rank", lambda: [])
+    monkeypatch.setattr(pipeline.triage, "run", _fake_triage_run)
+
+    def _raise(items, raw_items):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pipeline.triage_rules, "apply_rules", _raise)
+
+    pipeline.run()
+
+    brief = queries.get_brief(_today())
+    assert brief["degraded_lanes"] == []  # a rules bug must not degrade an already-good triage
+    titles = [item["title"] for item in brief["lanes"]["action_items"]]
+    assert "Test subject" in titles
+
+
 def test_pipeline_degrades_on_source_failure(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

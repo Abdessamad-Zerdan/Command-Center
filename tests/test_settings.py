@@ -124,6 +124,77 @@ def test_activity_page_shows_item_history_event(client: TestClient) -> None:
     assert "completed" in response.text
 
 
+def test_settings_page_links_to_triage_rules(client: TestClient) -> None:
+    response = client.get("/settings")
+    assert 'href="/settings/triage-rules"' in response.text
+
+
+def test_triage_rules_page_empty_state(client: TestClient) -> None:
+    response = client.get("/settings/triage-rules")
+    assert response.status_code == 200
+    assert "No rules yet." in response.text
+
+
+def test_create_triage_rule_route(client: TestClient) -> None:
+    response = client.post(
+        "/settings/triage-rules",
+        json={"field": "title", "match_value": "server down", "lane": "urgent"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert queries.list_triage_rules()[0]["match_value"] == "server down"
+
+
+def test_create_triage_rule_rejects_unknown_field(client: TestClient) -> None:
+    response = client.post(
+        "/settings/triage-rules", json={"field": "body", "match_value": "x", "lane": "urgent"}
+    )
+    assert response.status_code == 400
+
+
+def test_create_triage_rule_rejects_blank_match_value(client: TestClient) -> None:
+    response = client.post(
+        "/settings/triage-rules", json={"field": "title", "match_value": "  ", "lane": "urgent"}
+    )
+    assert response.status_code == 400
+
+
+def test_create_triage_rule_rejects_unknown_lane(client: TestClient) -> None:
+    response = client.post(
+        "/settings/triage-rules", json={"field": "title", "match_value": "x", "lane": "not_a_lane"}
+    )
+    assert response.status_code == 400
+
+
+def test_toggle_triage_rule_route(client: TestClient) -> None:
+    rule_id = queries.create_triage_rule("title", "x", "urgent")
+
+    response = client.patch(f"/settings/triage-rules/{rule_id}", json={"enabled": False})
+
+    assert response.status_code == 200
+    assert queries.list_triage_rules()[0]["enabled"] == 0
+
+
+def test_toggle_triage_rule_route_404s_for_unknown_id(client: TestClient) -> None:
+    response = client.patch("/settings/triage-rules/99999", json={"enabled": False})
+    assert response.status_code == 404
+
+
+def test_delete_triage_rule_route(client: TestClient) -> None:
+    rule_id = queries.create_triage_rule("title", "x", "urgent")
+
+    response = client.delete(f"/settings/triage-rules/{rule_id}")
+
+    assert response.status_code == 200
+    assert queries.list_triage_rules() == []
+
+
+def test_delete_triage_rule_route_404s_for_unknown_id(client: TestClient) -> None:
+    response = client.delete("/settings/triage-rules/99999")
+    assert response.status_code == 404
+
+
 def test_settings_page_shows_degraded_badge_on_the_affected_source(
     client: TestClient,
 ) -> None:
