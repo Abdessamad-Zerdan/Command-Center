@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from command_center import auth, fixtures, pipeline, queries, setup_wizard
+from command_center import auth, fixtures, pipeline, queries, setup_wizard, triage_rules
 from command_center.assistant import ingest as assistant_ingest
 from command_center.assistant.router import router as assistant_router
 from command_center.finances.router import router as finances_router
@@ -501,6 +501,60 @@ def settings_activity(request: Request):
         "settings_activity.html",
         {"tool_calls": tool_calls, "task_events": task_events},
     )
+
+
+@app.get("/settings/triage-rules")
+def settings_triage_rules(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "settings_triage_rules.html",
+        {"rules": queries.list_triage_rules(), "lanes": LANES, "lane_labels": LANE_LABELS},
+    )
+
+
+class TriageRuleIn(BaseModel):
+    field: str
+    match_value: str
+    lane: str
+
+
+@app.post("/settings/triage-rules")
+def create_triage_rule(payload: TriageRuleIn):
+    if payload.field not in triage_rules.FIELDS:
+        return JSONResponse(
+            {"ok": False, "errors": {"field": f"Must be one of: {', '.join(triage_rules.FIELDS)}"}},
+            status_code=400,
+        )
+    if not payload.match_value.strip():
+        return JSONResponse(
+            {"ok": False, "errors": {"match_value": "Enter text to match."}}, status_code=400
+        )
+    if payload.lane not in LANES:
+        return JSONResponse(
+            {"ok": False, "errors": {"lane": f"Unknown lane: {payload.lane!r}"}}, status_code=400
+        )
+    rule_id = queries.create_triage_rule(payload.field, payload.match_value.strip(), payload.lane)
+    return JSONResponse({"ok": True, "id": rule_id})
+
+
+class TriageRuleEnabledIn(BaseModel):
+    enabled: bool
+
+
+@app.patch("/settings/triage-rules/{rule_id}")
+def update_triage_rule(rule_id: int, payload: TriageRuleEnabledIn):
+    updated = queries.set_triage_rule_enabled(rule_id, payload.enabled)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return {"ok": True}
+
+
+@app.delete("/settings/triage-rules/{rule_id}")
+def delete_triage_rule(rule_id: int):
+    deleted = queries.delete_triage_rule(rule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return {"ok": True}
 
 
 class SourceConfigIn(BaseModel):

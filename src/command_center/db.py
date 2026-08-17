@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS task_events (
 CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events (task_id);
 CREATE INDEX IF NOT EXISTS idx_task_events_type_timestamp ON task_events (event_type, timestamp);
 
+CREATE TABLE IF NOT EXISTS triage_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    field TEXT NOT NULL,
+    match_value TEXT NOT NULL,
+    lane TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS reflection_cache (
     period_type TEXT NOT NULL,
     period_start TEXT NOT NULL,
