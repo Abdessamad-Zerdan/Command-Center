@@ -308,6 +308,32 @@ def move_item_to_today(item_id: int):
     return {"ok": True}
 
 
+class MoveToDateIn(BaseModel):
+    date: str
+
+
+@app.post("/items/{item_id}/move-to-date")
+def move_item_to_date_route(item_id: int, payload: MoveToDateIn):
+    # The generic form of move-to-today — used by the undo toast to move
+    # an item back to whichever date it actually came from, not always
+    # today. move-to-today itself stays a separate, no-body route since
+    # that's the one real users click.
+    moved = queries.move_item_to_date(item_id, payload.date)
+    if not moved:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"ok": True}
+
+
+@app.post("/items/{item_id}/reopen")
+def reopen_item(item_id: int):
+    # Undo for snooze/done — sets status back to 'pending' without
+    # touching brief_date/lane. No caller did this before the undo
+    # toast; set_item_status has always supported it (see its own
+    # _STATUS_EVENT_MAP, logged as "reopened").
+    queries.set_item_status(item_id, "pending")
+    return {"ok": True}
+
+
 @app.post("/rerun")
 def rerun():
     if auth.has_valid_credentials():

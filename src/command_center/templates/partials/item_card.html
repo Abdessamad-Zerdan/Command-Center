@@ -29,18 +29,46 @@
       {% if is_history %}
       <button
         type="button"
-        @click.stop="fetch('/items/{{ item.id }}/move-to-today', { method: 'POST' }).then(r => { if (r.ok) { removed = true; $store.counts['{{ item.lane }}']--; } })"
+        @click.stop="fetch('/items/{{ item.id }}/move-to-today', { method: 'POST' }).then(r => {
+          if (r.ok) {
+            removed = true;
+            $store.counts['{{ item.lane }}']--;
+            $store.toast.show('Brought to today', () => {
+              fetch('/items/{{ item.id }}/move-to-date', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date: '{{ item.brief_date }}' }),
+              }).then(r2 => { if (r2.ok) { removed = false; $store.counts['{{ item.lane }}']++; } });
+            });
+          }
+        })"
         class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
       >Bring to today</button>
       {% endif %}
       <button
         type="button"
-        @click.stop="fetch('/items/{{ item.id }}/snooze', { method: 'POST' }).then(r => { if (r.ok) { removed = true; $store.counts['{{ item.lane }}']--; } })"
+        @click.stop="fetch('/items/{{ item.id }}/snooze', { method: 'POST' }).then(r => {
+          if (r.ok) {
+            removed = true;
+            $store.counts['{{ item.lane }}']--;
+            $store.toast.show('Snoozed', () => {
+              fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { removed = false; $store.counts['{{ item.lane }}']++; } });
+            });
+          }
+        })"
         class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
       >Snooze</button>
       <button
         type="button"
-        @click.stop="fetch('/items/{{ item.id }}/done', { method: 'POST' }).then(r => { if (r.ok) { removed = true; $store.counts['{{ item.lane }}']--; } })"
+        @click.stop="fetch('/items/{{ item.id }}/done', { method: 'POST' }).then(r => {
+          if (r.ok) {
+            removed = true;
+            $store.counts['{{ item.lane }}']--;
+            $store.toast.show('Marked done', () => {
+              fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { removed = false; $store.counts['{{ item.lane }}']++; } });
+            });
+          }
+        })"
         class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
       >Done</button>
     </div>

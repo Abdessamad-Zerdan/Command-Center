@@ -27,6 +27,35 @@
   })();
 </script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+<script>
+  document.addEventListener('alpine:init', () => {
+    // Global, site-wide — any page can call $store.toast.show(message, undoFn)
+    // for a lightweight "X happened — Undo" notification. undoFn is optional;
+    // omit it for a plain toast with no undo action.
+    Alpine.store('toast', {
+      visible: false,
+      message: '',
+      undoFn: null,
+      timer: null,
+      show(message, undoFn = null) {
+        clearTimeout(this.timer);
+        this.message = message;
+        this.undoFn = undoFn;
+        this.visible = true;
+        this.timer = setTimeout(() => this.dismiss(), 5000);
+      },
+      dismiss() {
+        clearTimeout(this.timer);
+        this.visible = false;
+        this.undoFn = null;
+      },
+      runUndo() {
+        if (this.undoFn) this.undoFn();
+        this.dismiss();
+      },
+    });
+  });
+</script>
 <style>
   ::-webkit-scrollbar { height: 8px; width: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -136,5 +165,19 @@
 </button>
 
 {% block content %}{% endblock %}
+
+<div
+  x-data
+  x-show="$store.toast.visible"
+  x-transition
+  class="fixed bottom-4 left-1/2 -translate-x-1/2 sm:left-4 sm:translate-x-0 z-40 flex items-center gap-3 rounded-lg bg-stone-800 dark:bg-stone-100 text-stone-100 dark:text-stone-900 text-xs px-4 py-2.5 shadow-lg"
+>
+  <span x-text="$store.toast.message"></span>
+  <button
+    x-show="$store.toast.undoFn"
+    @click="$store.toast.runUndo()"
+    class="font-medium underline hover:no-underline"
+  >Undo</button>
+</div>
 </body>
 </html>
