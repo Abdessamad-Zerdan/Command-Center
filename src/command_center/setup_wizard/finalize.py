@@ -14,8 +14,13 @@ PROFILE_PATH = REPO_ROOT / "src" / "command_center" / "profile.py"
 # A real Groq-hosted model — the fresh-install default in config.py
 # (TRIAGE_MODEL="llama3.2:3b") is an Ollama tag, not a Groq one, so
 # step 10's live test needs this explicitly rather than whatever the
-# unconfigured default happens to be.
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+# unconfigured default happens to be. llama-3.3-70b-versatile (the
+# original default here) was removed from Groq's catalog entirely —
+# verified against a real account's /v1/models list, not just a
+# per-account permission issue — openai/gpt-oss-120b is a currently
+# available replacement confirmed to support both JSON-mode (triage)
+# and tool-calling (the assistant's task creation).
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 
 _PROFILE_SHAPED_KEYS = (
     "PROFILE",
