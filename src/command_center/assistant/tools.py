@@ -8,12 +8,13 @@ it's actually needed).
 
 from datetime import datetime
 
+from command_center import queries
 from command_center.config import LANE_LABELS, LANES
 from command_center.sources import tasks as tasks_module
 
 DEFAULT_TASKLIST_ID = "@default"
 
-TOOL_NAMES = {"create_task", "update_task", "complete_task"}
+TOOL_NAMES = {"create_task", "update_task", "complete_task", "move_task_to_date"}
 
 TOOL_SCHEMAS = [
     {
@@ -122,6 +123,48 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_task_to_date",
+            "description": (
+                "Move an item from a past day's brief to a different day "
+                "(usually today). Requires the item's local id, copied "
+                "exactly from the recent items list given in context — "
+                "that is NOT the same kind of id as update_task/"
+                "complete_task's task_id (a Google Tasks id). Never "
+                "invent an id; if you can't tell which item the user "
+                "means, ask a clarifying question instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "item_id": {
+                        "type": "integer",
+                        "description": "The item's local id, from the recent items list in context.",
+                    },
+                    "target_date": {
+                        "type": "string",
+                        "description": (
+                            "The day to move it to, in YYYY-MM-DD format. Resolve "
+                            "relative dates ('today', 'tomorrow') against today's "
+                            "date given in context."
+                        ),
+                    },
+                    "lane": {
+                        "type": "string",
+                        "enum": list(LANES),
+                        "description": (
+                            "Only set this if the user explicitly asked to also "
+                            "change its lane/category (e.g. 'move it to Tasks "
+                            "Due'). Omit to keep its current lane."
+                        ),
+                    },
+                },
+                "required": ["item_id", "target_date"],
+            },
+        },
+    },
 ]
 
 # Passed to run_groq_chat_with_tools on its own (never merged into
@@ -188,6 +231,14 @@ def _blank(value: object) -> bool:
     return value is None or not str(value).strip()
 
 
+def _parses_as_date(value: str) -> bool:
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
 def validate_args(name: str, args: dict | None) -> str | None:
     """Returns an error message, or None if args look usable."""
     if name not in TOOL_NAMES:
@@ -200,6 +251,15 @@ def validate_args(name: str, args: dict | None) -> str | None:
         return f"create_task's lane must be one of: {', '.join(LANES)}."
     if name in ("update_task", "complete_task") and _blank(args.get("task_id")):
         return f"{name} requires a task_id."
+    if name == "move_task_to_date":
+        if args.get("item_id") is None:
+            return "move_task_to_date requires an item_id."
+        if _blank(args.get("target_date")):
+            return "move_task_to_date requires a target_date."
+        elif not _parses_as_date(args["target_date"]):
+            return "move_task_to_date's target_date must be in YYYY-MM-DD format."
+        if args.get("lane") and args["lane"] not in LANES:
+            return f"move_task_to_date's lane must be one of: {', '.join(LANES)}."
     return None
 
 
@@ -251,6 +311,17 @@ def dispatch(name: str, args: dict, credentials) -> dict:
         return tasks_module.complete_task(
             credentials, tasklist_id=DEFAULT_TASKLIST_ID, task_id=args["task_id"]
         )
+    if name == "move_task_to_date":
+        # Local-DB-only — no Google Tasks API call, so `credentials` is
+        # unused here (move_task_to_date is exempted from the auth fetch
+        # in chat.py's confirm_action/confirm_batch for exactly this
+        # reason). brief_date/lane have no equivalent on a Google Task.
+        moved = queries.move_item_to_date(
+            item_id=int(args["item_id"]),
+            new_brief_date=args["target_date"],
+            lane=args.get("lane"),
+        )
+        return {"moved": moved}
     raise ValueError(f"Unknown tool: {name!r}")
 
 
@@ -314,6 +385,12 @@ def describe_pending(
         title = _resolve_title(args, title_lookup)
         return f"Mark '{title}' as complete?"
 
+    if name == "move_task_to_date":
+        title = title_lookup.get(args.get("item_id")) or f"item {args.get('item_id')}"
+        target = _format_due_date(args.get("target_date")) or args.get("target_date")
+        lane_clause = f" to {LANE_LABELS[args['lane']]}" if args.get("lane") in LANE_LABELS else ""
+        return f"Move '{title}' to {target}{lane_clause}?"
+
     return "Make this change?"
 
 
@@ -336,5 +413,10 @@ def describe_done(
     if name == "complete_task":
         title = _resolve_title(args, title_lookup)
         return f"Done — marked '{title}' as complete."
+
+    if name == "move_task_to_date":
+        title = title_lookup.get(args.get("item_id")) or f"item {args.get('item_id')}"
+        target = _format_due_date(args.get("target_date")) or args.get("target_date")
+        return f"Done — moved '{title}' to {target}."
 
     return "Done."

@@ -45,6 +45,35 @@ def test_live_task_context_reports_no_tasks_available(isolated_db: None) -> None
     assert lookup == {}
 
 
+def test_recent_history_context_reports_no_items(isolated_db: None) -> None:
+    text, lookup = chat._recent_history_context()
+    assert "No pending items" in text
+    assert lookup == {}
+
+
+def test_recent_history_context_lists_items_within_window(isolated_db: None) -> None:
+    from datetime import date, timedelta
+
+    yesterday = (date.fromisoformat(chat._today()) - timedelta(days=1)).isoformat()
+    with db.session() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO briefs (brief_date, generated_at, degraded_lanes) VALUES (?, ?, '[]')",
+            (yesterday, "2026-08-16T10:00:00"),
+        )
+        cursor = conn.execute(
+            "INSERT INTO items (brief_date, lane, source, source_id, title, why_it_matters, "
+            "suggested_next_step, priority, deep_link, status, created_at) "
+            "VALUES (?, 'action_items', 'google_tasks', 'gt1', 'Old task', '', '', 2, '', 'pending', ?)",
+            (yesterday, "2026-08-16T10:00:00"),
+        )
+        item_id = cursor.lastrowid
+
+    text, lookup = chat._recent_history_context()
+
+    assert "Old task" in text
+    assert lookup == {item_id: "Old task"}
+
+
 def test_project_context_reports_none_registered(isolated_db: None) -> None:
     text, lookup = chat._project_context()
     assert text == "No registered projects."
@@ -198,6 +227,82 @@ def test_answer_returns_pending_action_for_a_valid_tool_call(
     assert rows[0]["tool"] == "create_task"
 
 
+def test_answer_returns_pending_action_for_a_single_move_task_to_date_call(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(retrieval, "top_k", lambda query, k=5: [])
+    monkeypatch.setattr(
+        triage,
+        "run_groq_chat_with_tools",
+        lambda messages, tools: {
+            "content": None,
+            "tool_calls": [
+                {"name": "move_task_to_date", "arguments": {"item_id": 42, "target_date": "2026-08-17"}}
+            ],
+        },
+    )
+
+    result = chat.answer("bring that task to today")
+
+    assert result["pending_action"]["tool"] == "move_task_to_date"
+    assert result["pending_action"]["args"]["item_id"] == 42
+
+
+def test_answer_returns_pending_batch_for_multiple_tool_calls_in_one_turn(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Not a brain dump (single short request) — "bring all of yesterday's
+    # tasks to today" naturally produces multiple move_task_to_date calls
+    # in one model response, which must become a pending_batch just like
+    # the brain-dump extraction path does, not just take tool_calls[0].
+    monkeypatch.setattr(retrieval, "top_k", lambda query, k=5: [])
+    monkeypatch.setattr(
+        triage,
+        "run_groq_chat_with_tools",
+        lambda messages, tools: {
+            "content": None,
+            "tool_calls": [
+                {"name": "move_task_to_date", "arguments": {"item_id": 1, "target_date": "2026-08-17"}},
+                {"name": "move_task_to_date", "arguments": {"item_id": 2, "target_date": "2026-08-17"}},
+            ],
+        },
+    )
+
+    result = chat.answer("bring all of yesterday's tasks to today")
+
+    assert "pending_batch" in result
+    tasks = result["pending_batch"]["tasks"]
+    assert len(tasks) == 2
+    assert {t["args"]["item_id"] for t in tasks} == {1, 2}
+    with db.session() as conn:
+        rows = conn.execute("SELECT * FROM tool_call_log").fetchall()
+    assert len(rows) == 2
+    assert all(r["status"] == "proposed" for r in rows)
+
+
+def test_answer_multi_call_batch_skips_malformed_calls_but_keeps_valid_ones(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(retrieval, "top_k", lambda query, k=5: [])
+    monkeypatch.setattr(
+        triage,
+        "run_groq_chat_with_tools",
+        lambda messages, tools: {
+            "content": None,
+            "tool_calls": [
+                {"name": "move_task_to_date", "arguments": {"item_id": 1, "target_date": "2026-08-17"}},
+                {"name": "move_task_to_date", "arguments": {"target_date": "2026-08-17"}},  # missing item_id
+            ],
+        },
+    )
+
+    result = chat.answer("bring all of yesterday's tasks to today")
+
+    assert "pending_batch" in result
+    assert len(result["pending_batch"]["tasks"]) == 1
+    assert result["pending_batch"]["tasks"][0]["args"]["item_id"] == 1
+
+
 def test_answer_falls_back_to_plain_text_on_malformed_tool_call(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -259,6 +364,60 @@ def test_confirm_action_confirmed_calls_dispatch_with_correct_args(
     with db.session() as conn:
         rows = conn.execute("SELECT * FROM tool_call_log").fetchall()
     assert rows[0]["status"] == "confirmed"
+
+
+def test_confirm_action_move_task_to_date_never_requests_google_credentials(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _raise():
+        raise AssertionError("move_task_to_date must not fetch Google credentials")
+
+    monkeypatch.setattr(auth, "get_google_credentials", _raise)
+    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"moved": True})
+
+    result = chat.confirm_action(
+        {"tool": "move_task_to_date", "args": {"item_id": 1, "target_date": "2026-08-17"}},
+        confirmed=True,
+    )
+
+    assert "Done" in result["answer"]
+
+
+def test_confirm_action_move_task_to_date_resolves_title_from_history_before_moving(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import date, timedelta
+
+    yesterday = (date.fromisoformat(chat._today()) - timedelta(days=1)).isoformat()
+    item_id = queries.create_manual_item(yesterday, "action_items", "Old task")
+
+    result = chat.confirm_action(
+        {"tool": "move_task_to_date", "args": {"item_id": item_id, "target_date": chat._today()}},
+        confirmed=True,
+    )
+
+    assert "Old task" in result["answer"]
+    with db.session() as conn:
+        row = conn.execute("SELECT brief_date, status FROM items WHERE id = ?", (item_id,)).fetchone()
+    assert row["brief_date"] == chat._today()
+    assert row["status"] == "pending"
+
+
+def test_confirm_action_move_task_to_date_failure_gives_local_error_message(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _raise(name, args, credentials):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(tools, "dispatch", _raise)
+
+    result = chat.confirm_action(
+        {"tool": "move_task_to_date", "args": {"item_id": 1, "target_date": "2026-08-17"}},
+        confirmed=True,
+    )
+
+    assert "Google Tasks" not in result["answer"]
+    assert "try again" in result["answer"]
 
 
 def test_confirm_action_surfaces_auth_not_configured_message(
@@ -949,6 +1108,70 @@ def test_confirm_batch_one_dispatch_failure_among_several(
     statuses = {r["args_json"]: r["status"] for r in rows}
     assert statuses['{"title": "Good task"}'] == "confirmed"
     assert statuses['{"title": "Bad task"}'] == "failed"
+
+
+def test_confirm_batch_pure_move_batch_never_requests_google_credentials(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _raise():
+        raise AssertionError("a move-only batch must not fetch Google credentials")
+
+    monkeypatch.setattr(auth, "get_google_credentials", _raise)
+    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"moved": True})
+    pull_calls = []
+    monkeypatch.setattr(pipeline, "run_source", lambda name: pull_calls.append(name))
+
+    tasks = [
+        {"tool": "move_task_to_date", "args": {"item_id": 1, "target_date": "2026-08-17"}, "checked": True},
+        {"tool": "move_task_to_date", "args": {"item_id": 2, "target_date": "2026-08-17"}, "checked": True},
+    ]
+    result = chat.confirm_batch(tasks, confirmed=True)
+
+    assert "Done" in result["answer"]
+    assert pull_calls == []  # no Google Tasks sync needed for a purely-local batch
+    with db.session() as conn:
+        rows = conn.execute("SELECT * FROM tool_call_log").fetchall()
+    assert all(r["status"] == "confirmed" for r in rows)
+
+
+def test_confirm_batch_mixed_create_and_move_batch(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
+    monkeypatch.setattr(tools, "dispatch", lambda name, args, credentials: {"id": "new-id", "moved": True})
+    monkeypatch.setattr(pipeline, "run_source", lambda name: None)
+
+    tasks = [
+        {"tool": "create_task", "args": {"title": "New task"}, "checked": True},
+        {"tool": "move_task_to_date", "args": {"item_id": 1, "target_date": "2026-08-17"}, "checked": True},
+    ]
+    result = chat.confirm_batch(tasks, confirmed=True)
+
+    assert "New task" in result["answer"]  # create_task's existing "Created N tasks" wording preserved
+    assert "Done" in result["answer"]  # move_task_to_date's own describe_done sentence included too
+    with db.session() as conn:
+        rows = conn.execute("SELECT * FROM tool_call_log ORDER BY id").fetchall()
+    assert len(rows) == 2
+    assert all(r["status"] == "confirmed" for r in rows)
+
+
+def test_confirm_batch_move_dispatch_failure_reports_as_couldnt_make_changes(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _raise(name, args, credentials):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(tools, "dispatch", _raise)
+
+    tasks = [
+        {"tool": "move_task_to_date", "args": {"item_id": 1, "target_date": "2026-08-17"}, "checked": True}
+    ]
+    result = chat.confirm_batch(tasks, confirmed=True)
+
+    assert "Couldn't make" in result["answer"]
+    with db.session() as conn:
+        rows = conn.execute("SELECT * FROM tool_call_log").fetchall()
+    assert rows[0]["status"] == "failed"
 
 
 def test_confirm_batch_auth_not_configured(isolated_db: None, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,10 +5,11 @@ from command_center.assistant import tools
 
 def test_tool_schemas_have_expected_names_and_required_fields() -> None:
     by_name = {t["function"]["name"]: t["function"] for t in tools.TOOL_SCHEMAS}
-    assert set(by_name) == {"create_task", "update_task", "complete_task"}
+    assert set(by_name) == {"create_task", "update_task", "complete_task", "move_task_to_date"}
     assert by_name["create_task"]["parameters"]["required"] == ["title"]
     assert by_name["update_task"]["parameters"]["required"] == ["task_id"]
     assert by_name["complete_task"]["parameters"]["required"] == ["task_id"]
+    assert by_name["move_task_to_date"]["parameters"]["required"] == ["item_id", "target_date"]
 
 
 def test_create_task_schema_has_lane_and_project_id_fields() -> None:
@@ -150,6 +151,95 @@ def test_dispatch_complete_task(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_dispatch_unknown_tool_raises() -> None:
     with pytest.raises(ValueError):
         tools.dispatch("delete_everything", {}, credentials="fake-creds")
+
+
+def test_dispatch_move_task_to_date_ignores_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Local-DB-only mutation — no Google Tasks call, so passing None for
+    # credentials (as chat.py's confirm_action/confirm_batch do for this
+    # tool) must not raise or otherwise require it.
+    calls = []
+    monkeypatch.setattr(
+        tools.queries,
+        "move_item_to_date",
+        lambda item_id, new_brief_date, lane=None: calls.append(
+            {"item_id": item_id, "new_brief_date": new_brief_date, "lane": lane}
+        )
+        or True,
+    )
+
+    result = tools.dispatch(
+        "move_task_to_date", {"item_id": 42, "target_date": "2026-08-17"}, credentials=None
+    )
+
+    assert result == {"moved": True}
+    assert calls == [{"item_id": 42, "new_brief_date": "2026-08-17", "lane": None}]
+
+
+def test_dispatch_move_task_to_date_passes_lane_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        tools.queries,
+        "move_item_to_date",
+        lambda item_id, new_brief_date, lane=None: calls.append(lane) or True,
+    )
+
+    tools.dispatch(
+        "move_task_to_date",
+        {"item_id": 42, "target_date": "2026-08-17", "lane": "tasks_due"},
+        credentials=None,
+    )
+
+    assert calls == ["tasks_due"]
+
+
+def test_validate_args_requires_item_id_and_target_date_for_move() -> None:
+    assert tools.validate_args("move_task_to_date", {}) is not None
+    assert tools.validate_args("move_task_to_date", {"item_id": 1}) is not None
+    assert tools.validate_args("move_task_to_date", {"target_date": "2026-08-17"}) is not None
+    assert tools.validate_args("move_task_to_date", {"item_id": 1, "target_date": "2026-08-17"}) is None
+
+
+def test_validate_args_rejects_malformed_target_date() -> None:
+    assert tools.validate_args("move_task_to_date", {"item_id": 1, "target_date": "tomorrow"}) is not None
+    assert tools.validate_args("move_task_to_date", {"item_id": 1, "target_date": "08/17/2026"}) is not None
+
+
+def test_validate_args_rejects_unknown_lane_for_move() -> None:
+    assert (
+        tools.validate_args(
+            "move_task_to_date", {"item_id": 1, "target_date": "2026-08-17", "lane": "not_a_lane"}
+        )
+        is not None
+    )
+
+
+def test_describe_pending_move_task_to_date_resolves_title_from_history_lookup() -> None:
+    text = tools.describe_pending(
+        "move_task_to_date", {"item_id": 42, "target_date": "2026-08-17"}, {42: "Renew passport"}
+    )
+    assert "Renew passport" in text
+    assert "Aug 17" in text
+
+
+def test_describe_pending_move_task_to_date_falls_back_to_id_when_unknown() -> None:
+    text = tools.describe_pending("move_task_to_date", {"item_id": 999, "target_date": "2026-08-17"}, {})
+    assert "999" in text
+
+
+def test_describe_pending_move_task_to_date_shows_lane_when_set() -> None:
+    text = tools.describe_pending(
+        "move_task_to_date",
+        {"item_id": 42, "target_date": "2026-08-17", "lane": "tasks_due"},
+        {42: "Renew passport"},
+    )
+    assert "Tasks Due" in text
+
+
+def test_describe_done_move_task_to_date() -> None:
+    text = tools.describe_done(
+        "move_task_to_date", {"item_id": 42, "target_date": "2026-08-17"}, {42: "Renew passport"}
+    )
+    assert text == "Done — moved 'Renew passport' to Monday, Aug 17."
 
 
 def test_format_due_date_handles_valid_and_invalid_input() -> None:

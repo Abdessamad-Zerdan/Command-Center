@@ -56,29 +56,35 @@ def _looks_like_brain_dump(question: str) -> bool:
 
 SYSTEM_PROMPT_TEMPLATE = (
     "You are a personal assistant answering questions about {name} and, "
-    "when asked, creating/updating/completing their Google Tasks. "
+    "when asked, creating/updating/completing their Google Tasks, or "
+    "moving an item from a past day's brief to a different day. "
     "Answer plain questions using only the context provided below (their "
-    "vision document, portfolio, and current tasks). If the context "
-    "doesn't answer the question, say \"I don't have that information\" "
-    "— don't guess beyond what's given.\n\n"
-    "Only call a tool when the user clearly asks to create, change, or "
-    "complete a task. Before calling create_task: if they haven't stated "
-    "a due date, ask them for one in plain text first — never invent or "
-    "assume one. If they explicitly stated urgency or named a lane "
-    "directly ('urgent', 'asap', 'this is important', 'add it to my "
-    "meeting prep'), set create_task's lane field to match — otherwise "
-    "omit it entirely and let it be classified automatically; don't ask "
-    "about urgency if they didn't bring it up themselves. If they said "
-    "the task relates to one of the registered projects listed in "
-    "context below, set project_id to that project's exact numeric id "
-    "— never invent one or guess from a name that isn't in the list; "
-    "omit it entirely if no project was mentioned. Only call "
-    "create_task once you actually have the due date (or the user says "
-    "there isn't one) — don't call it just to ask a question. For "
-    "update_task or complete_task you must use a real task id from the "
-    "task list given in context — never invent one. If you can't tell "
-    "which task the user means, ask a clarifying question in plain "
-    "text instead of guessing."
+    "vision document, portfolio, current tasks, and recent past items). "
+    "If the context doesn't answer the question, say \"I don't have that "
+    "information\" — don't guess beyond what's given.\n\n"
+    "Only call a tool when the user clearly asks to create, change, "
+    "complete, or move a task. Before calling create_task: if they "
+    "haven't stated a due date, ask them for one in plain text first — "
+    "never invent or assume one. If they explicitly stated urgency or "
+    "named a lane directly ('urgent', 'asap', 'this is important', "
+    "'add it to my meeting prep'), set create_task's lane field to "
+    "match — otherwise omit it entirely and let it be classified "
+    "automatically; don't ask about urgency if they didn't bring it up "
+    "themselves. If they said the task relates to one of the registered "
+    "projects listed in context below, set project_id to that project's "
+    "exact numeric id — never invent one or guess from a name that "
+    "isn't in the list; omit it entirely if no project was mentioned. "
+    "Only call create_task once you actually have the due date (or the "
+    "user says there isn't one) — don't call it just to ask a question. "
+    "For update_task or complete_task you must use a real task id from "
+    "the task list given in context — never invent one. For "
+    "move_task_to_date you must use a real item id from the recent "
+    "items list given in context — that id is a different kind of "
+    "value from a task id, never mix them up or invent one; if they "
+    "ask to move 'all' of a given day's items, call move_task_to_date "
+    "once per matching item you can find in that list, not just the "
+    "first one. If you can't tell which task or item the user means, "
+    "ask a clarifying question in plain text instead of guessing."
 )
 
 EXTRACTION_SYSTEM_PROMPT = (
@@ -133,6 +139,30 @@ def _live_task_context() -> tuple[str, dict[str, str]]:
 
     title_lookup = {item["source_id"]: item["title"] for item in task_items}
     context_text = "\n".join(f"{item['source_id']}: {item['title']}" for item in task_items)
+    return context_text, title_lookup
+
+
+_HISTORY_CONTEXT_DAYS = 7
+
+
+def _recent_history_context() -> tuple[str, dict[int, str]]:
+    """(display text for the prompt, item id -> title lookup) — lets the
+    assistant answer "what was on yesterday's brief" and reference an
+    item by its local id for move_task_to_date, without a separate
+    lookup tool/round-trip. Scoped to the last _HISTORY_CONTEXT_DAYS days
+    before today, pending items only — same "still open" definition
+    get_brief() itself uses. Keys are ints (items.id), distinct in kind
+    from _live_task_context's string (Google task id) keys — the two
+    lookups get merged into one dict by callers with no collision risk.
+    """
+    items = queries.list_recent_pending_items(_today(), days=_HISTORY_CONTEXT_DAYS)
+    if not items:
+        return f"No pending items from the last {_HISTORY_CONTEXT_DAYS} days.", {}
+
+    title_lookup = {item["id"]: item["title"] for item in items}
+    context_text = "\n".join(
+        f"{item['id']} ({item['brief_date']}, {item['lane']}): {item['title']}" for item in items
+    )
     return context_text, title_lookup
 
 
@@ -241,6 +271,8 @@ def answer(question: str, history: list[dict] | None = None) -> dict:
     live_state = _live_brief_summary()
     task_context, title_lookup = _live_task_context()
     project_context, project_lookup = _project_context()
+    history_context, history_lookup = _recent_history_context()
+    title_lookup = {**title_lookup, **history_lookup}  # int item ids, no key collision with string task ids
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(name=PROFILE["name"])
     today = datetime.now(TZ)
@@ -252,6 +284,7 @@ def answer(question: str, history: list[dict] | None = None) -> dict:
         f"Current tasks (today's brief):\n{live_state}\n\n"
         f"Tasks you can reference by id (for update_task/complete_task):\n{task_context}\n\n"
         f"Registered projects you can reference by id (for create_task's project_id):\n{project_context}\n\n"
+        f"Recent past items you can reference by id (for move_task_to_date):\n{history_context}\n\n"
         f"Question: {question}"
     )
 
@@ -262,8 +295,8 @@ def answer(question: str, history: list[dict] | None = None) -> dict:
 
     result = triage.run_groq_chat_with_tools(messages, tools=tools.TOOL_SCHEMAS)
 
-    if result["tool_calls"]:
-        call = result["tool_calls"][0]  # one proposed action per turn
+    if len(result["tool_calls"]) == 1:
+        call = result["tool_calls"][0]
         error = tools.validate_args(call["name"], call["arguments"])
         if error:
             logger.info("Malformed tool call from Groq: %s (%s)", call["name"], error)
@@ -282,6 +315,35 @@ def answer(question: str, history: list[dict] | None = None) -> dict:
                     call["name"], call["arguments"], title_lookup, project_lookup
                 ),
             }
+        }
+
+    if len(result["tool_calls"]) >= 2:
+        # More than one proposed action in a single turn — e.g. "bring
+        # all of yesterday's tasks to today" naturally produces one
+        # move_task_to_date call per item. Reuses the exact pending_batch/
+        # confirm_batch shape the brain-dump path already built, so
+        # nothing new is needed on the frontend for this to work.
+        proposed = []
+        for call in result["tool_calls"]:
+            error = tools.validate_args(call["name"], call["arguments"])
+            if error:
+                logger.info("Malformed tool call from Groq: %s (%s)", call["name"], error)
+                continue
+            queries.log_tool_call(call["name"], call["arguments"], "proposed")
+            proposed.append(
+                {
+                    "tool": call["name"],
+                    "args": call["arguments"],
+                    "confirmation_text": tools.describe_pending(
+                        call["name"], call["arguments"], title_lookup, project_lookup
+                    ),
+                }
+            )
+        if proposed:
+            return {"pending_batch": {"tasks": proposed}}
+        return {
+            "answer": "I couldn't quite work out what you wanted to change — could you rephrase that?",
+            "sources": [],
         }
 
     sources = list(dict.fromkeys(c["section"] for c in chunks))  # dedup, keep order
@@ -338,6 +400,9 @@ def _sync_local_task_state(tool_name: str, args: dict, result: dict | None) -> N
         logger.exception("Failed to sync local task state after %s", tool_name)
 
 
+_LOCAL_ONLY_TOOLS = {"move_task_to_date"}  # no Google Tasks call involved — see dispatch()
+
+
 def confirm_action(pending_action: dict, confirmed: bool) -> dict:
     tool_name = pending_action.get("tool")
     args = pending_action.get("args") or {}
@@ -346,8 +411,20 @@ def confirm_action(pending_action: dict, confirmed: bool) -> dict:
         queries.log_tool_call(tool_name, args, "cancelled")
         return {"answer": "Okay, not making that change.", "sources": []}
 
+    # Resolve lookups before dispatch, not after — for complete_task the
+    # sync flips the item to status='done' (dropping it out of
+    # get_brief()'s pending-only results), and for move_task_to_date the
+    # mutation itself moves the item's brief_date out of
+    # _recent_history_context()'s window. Either way, a lookup taken
+    # afterwards would miss the very item just acted on and describe_done
+    # would fall back to the raw id.
+    _, title_lookup = _live_task_context()
+    _, project_lookup = _project_context()
+    _, history_lookup = _recent_history_context()
+    title_lookup = {**title_lookup, **history_lookup}
+
     try:
-        credentials = auth.get_google_credentials()
+        credentials = None if tool_name in _LOCAL_ONLY_TOOLS else auth.get_google_credentials()
         result = tools.dispatch(tool_name, args, credentials)
     except auth.AuthNotConfigured as exc:
         queries.log_tool_call(tool_name, args, "failed")
@@ -355,18 +432,14 @@ def confirm_action(pending_action: dict, confirmed: bool) -> dict:
     except Exception:
         logger.exception("Tool call failed: %s", tool_name)
         queries.log_tool_call(tool_name, args, "failed")
-        return {
-            "answer": "Couldn't reach Google Tasks — try again in a moment.",
-            "sources": [],
-        }
+        message = (
+            "Couldn't make that change — try again in a moment."
+            if tool_name in _LOCAL_ONLY_TOOLS
+            else "Couldn't reach Google Tasks — try again in a moment."
+        )
+        return {"answer": message, "sources": []}
 
     queries.log_tool_call(tool_name, args, "confirmed")
-    # Resolve the title before syncing local state — for complete_task,
-    # the sync flips the item to status='done', which drops it out of
-    # get_brief()'s pending-only results, so a lookup taken afterwards
-    # would miss it and describe_done would fall back to the raw id.
-    _, title_lookup = _live_task_context()
-    _, project_lookup = _project_context()
     _sync_local_task_state(tool_name, args, result)
     return {
         "answer": tools.describe_done(tool_name, args, title_lookup, project_lookup),
@@ -395,15 +468,32 @@ def confirm_batch(tasks: list[dict], confirmed: bool) -> dict:
     if not checked:
         return {"answer": "Okay, not creating those tasks.", "sources": []}
 
-    try:
-        credentials = auth.get_google_credentials()
-    except auth.AuthNotConfigured as exc:
-        for task in checked:
-            queries.log_tool_call(task.get("tool") or "create_task", task.get("args") or {}, "failed")
-        return {"answer": str(exc), "sources": []}
+    # move_task_to_date needs no Google credentials — see dispatch()'s
+    # docstring for that branch. Skip the fetch entirely if that's all
+    # this batch contains, rather than failing a purely-local batch just
+    # because Google isn't connected.
+    needs_google = any((t.get("tool") or "create_task") not in _LOCAL_ONLY_TOOLS for t in checked)
+    credentials = None
+    if needs_google:
+        try:
+            credentials = auth.get_google_credentials()
+        except auth.AuthNotConfigured as exc:
+            for task in checked:
+                queries.log_tool_call(task.get("tool") or "create_task", task.get("args") or {}, "failed")
+            return {"answer": str(exc), "sources": []}
+
+    # Resolved once, before any dispatch — same before-not-after reasoning
+    # as confirm_action (a move/complete changes what these lookups would
+    # themselves return afterward).
+    _, title_lookup = _live_task_context()
+    _, project_lookup = _project_context()
+    _, history_lookup = _recent_history_context()
+    title_lookup = {**title_lookup, **history_lookup}
 
     created_titles: list[str] = []
     failed_titles: list[str] = []
+    other_done: list[str] = []
+    other_failed: list[str] = []
 
     for task in checked:
         args = task.get("args") or {}
@@ -413,10 +503,24 @@ def confirm_batch(tasks: list[dict], confirmed: bool) -> dict:
         except Exception:
             logger.exception("Batch tool call failed: %s", tool_name)
             queries.log_tool_call(tool_name, args, "failed")
-            failed_titles.append(args.get("title") or "untitled task")
+            if tool_name == "create_task":
+                failed_titles.append(args.get("title") or "untitled task")
+            else:
+                other_failed.append(tools.describe_pending(tool_name, args, title_lookup, project_lookup))
             continue
         queries.log_tool_call(tool_name, args, "confirmed")
-        created_titles.append(args.get("title") or "untitled task")
+        if tool_name == "create_task":
+            created_titles.append(args.get("title") or "untitled task")
+        elif tool_name == "update_task" and args.get("title"):
+            queries.update_item_from_task(args["task_id"], title=args["title"])
+            other_done.append(tools.describe_done(tool_name, args, title_lookup, project_lookup))
+        elif tool_name == "complete_task":
+            queries.update_item_from_task(args["task_id"], status="done")
+            other_done.append(tools.describe_done(tool_name, args, title_lookup, project_lookup))
+        else:
+            # move_task_to_date already applied its own local mutation
+            # inside dispatch() — nothing else to sync.
+            other_done.append(tools.describe_done(tool_name, args, title_lookup, project_lookup))
 
     if created_titles:
         # Same reasoning as _sync_local_task_state's create_task branch —
@@ -438,4 +542,8 @@ def confirm_batch(tasks: list[dict], confirmed: bool) -> dict:
         )
     if failed_titles:
         parts.append(f"Couldn't create {len(failed_titles)}: " + ", ".join(f"'{t}'" for t in failed_titles))
+    if other_done:
+        parts.append(" ".join(other_done))
+    if other_failed:
+        parts.append("Couldn't make some changes: " + "; ".join(other_failed))
     return {"answer": " ".join(parts) or "Okay, not creating those tasks.", "sources": []}

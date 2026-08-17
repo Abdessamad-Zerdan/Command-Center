@@ -109,6 +109,69 @@ def set_item_status(item_id: int, status: str, snoozed_until: str | None = None)
             )
 
 
+def move_item_to_date(item_id: int, new_brief_date: str, lane: str | None = None) -> bool:
+    """Moves an item to a different day's brief — resets status to
+    'pending' (so it actually shows up there) and optionally changes
+    lane in the same update. Ensures the target day's briefs row exists
+    first, same idiom as create_manual_item. Returns True if a row
+    was matched.
+    """
+    now = datetime.now(TZ).isoformat()
+    with session() as conn:
+        conn.execute(
+            "INSERT INTO briefs (brief_date, generated_at, degraded_lanes) "
+            "VALUES (?, ?, '[]') ON CONFLICT(brief_date) DO NOTHING",
+            (new_brief_date, now),
+        )
+        row = conn.execute(
+            "SELECT lane, source, title FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if row is None:
+            return False
+
+        sets = ["brief_date = ?", "status = 'pending'"]
+        params: list[Any] = [new_brief_date]
+        if lane is not None:
+            sets.append("lane = ?")
+            params.append(lane)
+        params.append(item_id)
+        cursor = conn.execute(f"UPDATE items SET {', '.join(sets)} WHERE id = ?", params)
+        moved = cursor.rowcount > 0
+        if moved:
+            log_task_event(
+                item_id,
+                "moved",
+                metadata={
+                    "lane": lane or row["lane"],
+                    "source": row["source"],
+                    "title": row["title"],
+                    "to_date": new_brief_date,
+                },
+                conn=conn,
+            )
+        return moved
+
+
+def list_recent_pending_items(before_date: str, days: int = 7) -> list[dict[str, Any]]:
+    """Still-pending items from the `days` days immediately before
+    `before_date` (not including it) — lets the assistant answer "what
+    was on yesterday's brief" and look up ids to hand to
+    move_item_to_date, without needing a brand new per-date lookup tool
+    for every day someone might ask about."""
+    with session() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM items
+            WHERE status = 'pending'
+              AND brief_date < ?
+              AND brief_date >= date(?, ?)
+            ORDER BY brief_date DESC, priority ASC, id ASC
+            """,
+            (before_date, before_date, f"-{days} days"),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def touch_brief_generated_at(brief_date: str) -> None:
     with session() as conn:
         conn.execute(
