@@ -903,7 +903,15 @@ def get_setup_invite_by_token(token: str) -> dict[str, Any] | None:
 
 def list_setup_invites() -> list[dict[str, Any]]:
     with session() as conn:
-        rows = conn.execute("SELECT * FROM setup_invites ORDER BY created_at DESC").fetchall()
+        # id DESC as a tiebreaker — two invites created back-to-back can
+        # get the exact same created_at timestamp string (seen in
+        # practice, not just theoretical), and created_at DESC alone
+        # leaves SQLite's tie-break order undefined, which showed up as
+        # a real intermittent test failure. id always reflects true
+        # insertion order regardless.
+        rows = conn.execute(
+            "SELECT * FROM setup_invites ORDER BY created_at DESC, id DESC"
+        ).fetchall()
         return [dict(row) for row in rows]
 
 
