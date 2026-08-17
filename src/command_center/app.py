@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from command_center import auth, fixtures, pipeline, queries, setup_wizard, triage_rules
+from command_center import auth, fixtures, nudges, pipeline, queries, setup_wizard, triage_rules
 from command_center.assistant import ingest as assistant_ingest
 from command_center.assistant.router import router as assistant_router
 from command_center.finances.router import router as finances_router
@@ -225,6 +225,7 @@ def dashboard(request: Request):
             "is_history": False,
             "tz_name": str(TZ),
             "active_projects": queries.list_registered_projects(active_only=True),
+            "nudges": nudges.compute_nudges(brief_date),
         },
     )
 
@@ -260,6 +261,7 @@ def history_detail(request: Request, brief_date: str):
             "is_history": brief_date != _today(),
             "tz_name": str(TZ),
             "active_projects": queries.list_registered_projects(active_only=True),
+            "nudges": [],
         },
     )
 
