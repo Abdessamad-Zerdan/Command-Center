@@ -112,14 +112,27 @@ def test_invite_status_expired(client: TestClient) -> None:
 # --- wizard gating -------------------------------------------------------------
 
 
-def test_setup_without_any_invite_is_blocked(client: TestClient) -> None:
+def test_setup_wizard_is_open_when_no_invite_has_ever_been_created(client: TestClient) -> None:
+    # TEMPORARY first-run bypass (see invites.request_is_invited's own
+    # docstring): a genuinely fresh instance that has never created a
+    # single invite has no way to hand itself one, so the wizard is open
+    # with no token needed. Closes the moment any real invite exists —
+    # see the tests below.
     response = client.get("/setup/step/1")
-    assert response.status_code == 403
-    assert "invalid or has expired" in response.text
+    assert response.status_code == 200
+    assert "Step 1 of 10" in response.text
 
 
-def test_setup_with_unknown_invite_token_is_blocked(client: TestClient) -> None:
+def test_setup_with_unknown_invite_token_is_blocked_once_a_real_invite_exists(
+    client: TestClient,
+) -> None:
+    # The first-run bypass only applies while zero invites exist at all —
+    # once a real one has been created, an unrelated garbage token must
+    # still be rejected, not silently let through.
+    queries.create_setup_invite("a@example.com", invites.generate_token(), _future())
+
     response = client.get("/setup/step/1?invite=not-a-real-token")
+
     assert response.status_code == 403
 
 

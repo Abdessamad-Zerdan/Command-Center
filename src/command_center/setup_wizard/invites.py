@@ -45,7 +45,20 @@ def request_is_invited(state: dict[str, Any], query_token: str | None) -> bool:
     used or expires — acceptable for a "temporary, few people, one
     setup at a time" instance, not a guarantee against concurrent
     visitors.
+
+    TEMPORARY first-run bypass: if this instance has never created a
+    single invite in its whole history, the wizard is wide open with no
+    token needed. Closes the moment anyone ever creates one real invite
+    via /settings/invites, so it only ever applies to a genuinely fresh,
+    never-configured clone — exactly the "your own first setup, no
+    instance yet exists to hand yourself an invite from" case SETUP.md
+    otherwise routes around the wizard entirely for. To revert to
+    always requiring a real invite (even for a totally fresh instance),
+    delete this block.
     """
+    if not queries.list_setup_invites():
+        return True
+
     token = state.get("invite_token") or query_token
     if not token:
         return False
