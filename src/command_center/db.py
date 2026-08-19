@@ -195,6 +195,14 @@ CREATE TABLE IF NOT EXISTS triage_corrections (
 
 CREATE INDEX IF NOT EXISTS idx_triage_corrections_pattern
     ON triage_corrections (source, from_lane, to_lane);
+
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    stored_name TEXT NOT NULL UNIQUE,
+    char_count INTEGER NOT NULL,
+    uploaded_at TEXT NOT NULL
+);
 """
 
 

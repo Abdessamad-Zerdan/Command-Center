@@ -40,6 +40,18 @@
       </form>
     </div>
 
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Knowledge documents</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Upload a CV or project writeup (PDF) so the assistant knows about it.
+        </div>
+      </div>
+      <a href="/settings/knowledge" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
     <div x-data="{ enabled: localStorage.getItem('tooltipsEnabled') !== 'off' }" class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
       <div class="min-w-0">
         <div class="font-serif text-base text-stone-900 dark:text-stone-100">Show icon labels on hover</div>

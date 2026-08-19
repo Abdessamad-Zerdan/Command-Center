@@ -3,8 +3,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from command_center import db
-from command_center.assistant import embeddings, ingest
+from _pdf_fixtures import make_test_pdf
+from command_center import db, queries
+from command_center.assistant import documents, embeddings, ingest
 
 
 @pytest.fixture()
@@ -14,6 +15,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     data_dir = tmp_path / "data"
     monkeypatch.setattr(ingest, "DATA_DIR", data_dir)
     monkeypatch.setattr(ingest, "VISION_MD_PATH", data_dir / "vision.md")
+    monkeypatch.setattr(documents, "DOCUMENTS_DIR", data_dir / "documents")
     # Deterministic fake embeddings — the real ONNX model never loads in
     # tests (slow, and would need a network download on first use).
     monkeypatch.setattr(
@@ -152,3 +154,65 @@ def test_get_index_status_reports_count_and_timestamp(isolated: Path) -> None:
     status = ingest.get_index_status()
     assert status["chunk_count"] > 0
     assert status["last_indexed_at"] is not None
+
+
+# --- knowledge documents ---------------------------------------------------------
+
+
+def test_chunk_documents_extracts_and_labels_uploaded_pdfs(isolated: Path) -> None:
+    stored_name, _, char_count = documents.save_upload("resume.pdf", make_test_pdf("Ada CV text"))
+    queries.create_knowledge_document("resume.pdf", stored_name, char_count)
+
+    sections = ingest._chunk_documents()
+
+    assert sections == [("resume.pdf", "Ada CV text")]
+
+
+def test_chunk_documents_labels_multi_chunk_documents_with_part_numbers(
+    isolated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored_name, _, char_count = documents.save_upload("resume.pdf", make_test_pdf("Some text"))
+    queries.create_knowledge_document("resume.pdf", stored_name, char_count)
+    monkeypatch.setattr(documents, "chunk_document_text", lambda text: ["Part one", "Part two"])
+
+    sections = ingest._chunk_documents()
+
+    assert sections == [("resume.pdf (part 1)", "Part one"), ("resume.pdf (part 2)", "Part two")]
+
+
+def test_chunk_documents_skips_a_missing_file_without_raising(isolated: Path) -> None:
+    queries.create_knowledge_document("ghost.pdf", "does-not-exist.pdf", 100)
+    assert ingest._chunk_documents() == []
+
+
+def test_rebuild_index_includes_uploaded_document_chunks(isolated: Path) -> None:
+    stored_name, _, char_count = documents.save_upload(
+        "resume.pdf", make_test_pdf("Backend engineer with 8 years experience")
+    )
+    queries.create_knowledge_document("resume.pdf", stored_name, char_count)
+
+    ingest.rebuild_index()
+
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT section, content FROM content_chunks WHERE source = 'document'"
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["section"] == "resume.pdf"
+    assert "Backend engineer" in rows[0]["content"]
+
+
+def test_rebuild_index_still_includes_vision_and_profile_alongside_documents(
+    isolated: Path,
+) -> None:
+    stored_name, _, char_count = documents.save_upload("resume.pdf", make_test_pdf("CV text"))
+    queries.create_knowledge_document("resume.pdf", stored_name, char_count)
+
+    ingest.rebuild_index()
+
+    with db.session() as conn:
+        sources = {
+            row["source"]
+            for row in conn.execute("SELECT DISTINCT source FROM content_chunks").fetchall()
+        }
+    assert {"vision", "profile", "document"} <= sources

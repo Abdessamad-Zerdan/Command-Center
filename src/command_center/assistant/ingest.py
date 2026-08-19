@@ -1,16 +1,21 @@
 """Chunking + index build for the assistant's corpus: data/vision.md
-(split by ## heading) and profile.py's PROFILE/PROJECTS (one Bio chunk,
-one per project). Task/brief data is deliberately NOT ingested here — it
-changes too often for this hash-based reindex model; chat.py fetches it
-live at question time instead (see chat.py's docstring).
+(split by ## heading), profile.py's PROFILE/PROJECTS (one Bio chunk,
+one per project), and any uploaded PDF documents (see documents.py —
+size-budgeted chunks, no heading structure to split on). Task/brief
+data is deliberately NOT ingested here — it changes too often for this
+hash-based reindex model; chat.py fetches it live at question time
+instead (see chat.py's docstring).
 """
 
 import hashlib
+import logging
 from datetime import datetime
 
-from command_center import db
-from command_center.assistant import embeddings
+from command_center import db, queries
+from command_center.assistant import documents, embeddings
 from command_center.config import PROFILE, PROJECTS, REPO_ROOT, TZ
+
+logger = logging.getLogger(__name__)
 
 DATA_DIR = REPO_ROOT / "data"
 VISION_MD_PATH = DATA_DIR / "vision.md"
@@ -79,6 +84,29 @@ def _chunk_profile() -> list[tuple[str, str]]:
     return chunks
 
 
+def _chunk_documents() -> list[tuple[str, str]]:
+    """Re-extracts every uploaded document from disk on each rebuild —
+    same "re-read from source" approach as vision.md, just with a PDF
+    instead of a markdown file. One document failing to re-extract
+    (deleted file, corrupted PDF) is logged and skipped, not fatal to
+    the rest of the index — matches every other degrade-don't-crash path
+    in this app.
+    """
+    sections: list[tuple[str, str]] = []
+    for doc in queries.list_knowledge_documents():
+        path = documents.DOCUMENTS_DIR / doc["stored_name"]
+        try:
+            text = documents.extract_text_from_file(path)
+        except (FileNotFoundError, documents.DocumentError):
+            logger.exception("Re-extracting knowledge document %s failed, skipping", doc["filename"])
+            continue
+        chunks = documents.chunk_document_text(text)
+        for i, chunk in enumerate(chunks, start=1):
+            label = doc["filename"] if len(chunks) == 1 else f"{doc['filename']} (part {i})"
+            sections.append((label, chunk))
+    return sections
+
+
 def _get_metadata(conn, key: str) -> str | None:
     row = conn.execute("SELECT value FROM index_metadata WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else None
@@ -106,10 +134,14 @@ def rebuild_index(force: bool = False) -> bool:
         if not force and stored_hash == current_hash and chunk_count > 0:
             return False
 
-        all_chunks = [
-            ("vision", section, content)
-            for section, content in _chunk_vision_md(VISION_MD_PATH.read_text(encoding="utf-8"))
-        ] + [("profile", section, content) for section, content in _chunk_profile()]
+        all_chunks = (
+            [
+                ("vision", section, content)
+                for section, content in _chunk_vision_md(VISION_MD_PATH.read_text(encoding="utf-8"))
+            ]
+            + [("profile", section, content) for section, content in _chunk_profile()]
+            + [("document", section, content) for section, content in _chunk_documents()]
+        )
 
         conn.execute("DELETE FROM content_chunks")
 

@@ -737,3 +737,44 @@ def test_update_item_lane_route_logs_updated_event(client: TestClient) -> None:
     assert response.status_code == 200
     events = _events(item_id)
     assert [e["event_type"] for e in events] == ["created", "updated"]
+
+
+# --- knowledge_documents CRUD ------------------------------------------------
+
+
+def test_create_and_list_knowledge_document(isolated_db: None) -> None:
+    doc_id = queries.create_knowledge_document("resume.pdf", "abc123.pdf", 500)
+
+    docs = queries.list_knowledge_documents()
+
+    assert len(docs) == 1
+    assert docs[0]["id"] == doc_id
+    assert docs[0]["filename"] == "resume.pdf"
+    assert docs[0]["stored_name"] == "abc123.pdf"
+    assert docs[0]["char_count"] == 500
+
+
+def test_list_knowledge_documents_newest_first(isolated_db: None) -> None:
+    first = queries.create_knowledge_document("a.pdf", "a-stored.pdf", 100)
+    second = queries.create_knowledge_document("b.pdf", "b-stored.pdf", 200)
+
+    docs = queries.list_knowledge_documents()
+
+    assert [d["id"] for d in docs] == [second, first]
+
+
+def test_get_knowledge_document_returns_none_for_unknown_id(isolated_db: None) -> None:
+    assert queries.get_knowledge_document(99999) is None
+
+
+def test_delete_knowledge_document_removes_the_row(isolated_db: None) -> None:
+    doc_id = queries.create_knowledge_document("a.pdf", "a-stored.pdf", 100)
+
+    deleted = queries.delete_knowledge_document(doc_id)
+
+    assert deleted is True
+    assert queries.list_knowledge_documents() == []
+
+
+def test_delete_knowledge_document_returns_false_for_unknown_id(isolated_db: None) -> None:
+    assert queries.delete_knowledge_document(99999) is False
