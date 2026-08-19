@@ -7,5 +7,6 @@ __pycache__/
 *.log
 src/command_center/profile.py
 data/vision.md
+data/documents/
 CLAUDE.md
 prompt.md

@@ -1231,3 +1231,38 @@ def export_briefs() -> list[dict[str, Any]]:
     with session() as conn:
         rows = conn.execute("SELECT * FROM briefs ORDER BY brief_date ASC").fetchall()
         return [dict(row) for row in rows]
+
+
+# --- knowledge_documents -------------------------------------------------------
+# Uploaded CVs/project docs the assistant's index draws from, alongside
+# vision.md and profile.py — see assistant/documents.py for extraction.
+
+
+def create_knowledge_document(filename: str, stored_name: str, char_count: int) -> int:
+    with session() as conn:
+        cursor = conn.execute(
+            "INSERT INTO knowledge_documents (filename, stored_name, char_count, uploaded_at) "
+            "VALUES (?, ?, ?, ?)",
+            (filename, stored_name, char_count, datetime.now(TZ).isoformat()),
+        )
+        return cursor.lastrowid
+
+
+def list_knowledge_documents() -> list[dict[str, Any]]:
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM knowledge_documents ORDER BY uploaded_at DESC, id DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_knowledge_document(doc_id: int) -> dict[str, Any] | None:
+    with session() as conn:
+        row = conn.execute("SELECT * FROM knowledge_documents WHERE id = ?", (doc_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def delete_knowledge_document(doc_id: int) -> bool:
+    with session() as conn:
+        cursor = conn.execute("DELETE FROM knowledge_documents WHERE id = ?", (doc_id,))
+        return cursor.rowcount > 0

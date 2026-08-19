@@ -19,6 +19,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "openai>=3.0.0",
     "pathspec>=0.12.1",
+    "pypdf>=6.16.1",
     "python-multipart>=0.0.32",
     "tzdata>=2026.3",
     "uvicorn[standard]>=0.52.1",

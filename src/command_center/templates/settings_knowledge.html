@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Knowledge Documents{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Knowledge Documents</h1>
+    <a href="/settings" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to settings</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div
+    x-data="{
+      uploading: false,
+      error: '',
+      documents: {{ documents | tojson }},
+      upload() {
+        const input = this.$refs.fileInput;
+        const file = input.files[0];
+        if (!file) return;
+        this.uploading = true;
+        this.error = '';
+        const body = new FormData();
+        body.append('file', file);
+        fetch('/settings/knowledge/upload', { method: 'POST', body }).then(async r => {
+          this.uploading = false;
+          const data = await r.json();
+          if (!r.ok) { this.error = data.detail || 'Upload failed.'; return; }
+          this.documents.unshift({
+            id: data.id, filename: file.name, char_count: data.char_count,
+            uploaded_at: new Date().toISOString(),
+          });
+          input.value = '';
+        });
+      },
+      remove(doc) {
+        if (!confirm(`Remove '${doc.filename}'? The assistant will forget its contents.`)) return;
+        fetch(`/settings/knowledge/${doc.id}`, { method: 'DELETE' }).then(r => {
+          if (r.ok) { this.documents = this.documents.filter(d => d.id !== doc.id); }
+        });
+      },
+    }"
+    class="max-w-2xl space-y-3"
+  >
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3">
+      <div class="font-serif text-base text-stone-900 dark:text-stone-100 mb-1">Upload a document</div>
+      <p class="text-xs text-stone-500 dark:text-stone-400 mb-2">
+        A CV, resume, or project writeup (PDF) — its text is chunked and indexed
+        alongside your profile and vision.md, so the assistant can answer questions
+        grounded in it. Re-indexed automatically after every upload or removal.
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <input
+          type="file"
+          accept=".pdf"
+          x-ref="fileInput"
+          class="text-xs text-stone-600 dark:text-stone-300 file:mr-2 file:text-xs file:px-3 file:py-1.5 file:rounded file:border-0 file:bg-rust file:hover:bg-[#9c4830] dark:file:bg-rust-light dark:file:hover:bg-[#e08761] file:text-white file:font-medium file:cursor-pointer"
+        >
+        <button
+          @click="upload()"
+          :disabled="uploading"
+          class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap disabled:opacity-50"
+        >
+          <span x-show="!uploading">Upload</span>
+          <span x-show="uploading">Uploading…</span>
+        </button>
+      </div>
+      <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-2"></p>
+    </div>
+
+    <div class="rounded-lg bg-stone-100 dark:bg-stone-800/50 p-4">
+      <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-2">Your documents</div>
+      <template x-if="documents.length === 0">
+        <p class="text-xs text-stone-400 dark:text-stone-500 italic">No documents uploaded yet.</p>
+      </template>
+      <template x-for="doc in documents" :key="doc.id">
+        <div class="flex items-center justify-between gap-3 py-1.5 border-t border-stone-200 dark:border-stone-700 first:border-t-0 text-xs">
+          <div class="min-w-0 text-stone-700 dark:text-stone-300">
+            <span class="font-medium text-stone-900 dark:text-stone-100" x-text="doc.filename"></span>
+            <span class="text-stone-400 dark:text-stone-500" x-text="`— ${doc.char_count.toLocaleString()} characters`"></span>
+          </div>
+          <button @click="remove(doc)" class="shrink-0 text-stone-400 dark:text-stone-500 hover:text-red-600 dark:hover:text-red-400">Remove</button>
+        </div>
+      </template>
+    </div>
+
+  </div>
+</main>
+{% endblock %}
