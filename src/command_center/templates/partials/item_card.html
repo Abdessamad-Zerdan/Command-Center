@@ -63,50 +63,85 @@
         class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
       >Bring to today</button>
       {% endif %}
-      <a
-        href="/?pomodoro_task_id={{ item.id }}&pomodoro_task_name={{ item.title | urlencode }}"
-        @click.stop
-        class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
-      >Start Pomodoro</a>
-      <button
-        type="button"
-        @click.stop="fetch('/items/{{ item.id }}/snooze', { method: 'POST' }).then(r => {
-          if (r.ok) {
-            removed = true;
-            $store.counts['{{ item.lane }}']--;
-            $store.toast.show('Snoozed', () => {
-              fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { removed = false; $store.counts['{{ item.lane }}']++; } });
-            });
-          }
-        })"
-        class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
-      >Snooze</button>
-      <button
-        type="button"
-        @click.stop="fetch('/items/{{ item.id }}/done', { method: 'POST' }).then(r => {
-          if (r.ok) {
-            removed = true;
-            $store.counts['{{ item.lane }}']--;
-            $store.toast.show('Marked done', () => {
-              fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { removed = false; $store.counts['{{ item.lane }}']++; } });
-            });
-          }
-        })"
-        class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
-      >Done</button>
-      <button
-        type="button"
-        @click.stop="fetch('/items/{{ item.id }}/dismiss', { method: 'POST' }).then(r => {
-          if (r.ok) {
-            removed = true;
-            $store.counts['{{ item.lane }}']--;
-            $store.toast.show('Dismissed', () => {
-              fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { removed = false; $store.counts['{{ item.lane }}']++; } });
-            });
-          }
-        })"
-        class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
-      >Dismiss</button>
+      <div x-data="cardMenu()" class="relative">
+        <button
+          type="button"
+          x-ref="trigger"
+          @click.stop="toggle()"
+          aria-label="More actions"
+          aria-haspopup="true"
+          :aria-expanded="open"
+          class="w-8 h-8 flex items-center justify-center rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/></svg>
+        </button>
+
+        <template x-teleport="body">
+          <div
+            x-ref="panel"
+            x-show="open"
+            x-cloak
+            @click.outside="close()"
+            @keydown.escape.window="close()"
+            @scroll.window="close()"
+            @resize.window="close()"
+            x-transition:enter="transition ease-out duration-150"
+            x-transition:enter-start="opacity-0 scale-95"
+            x-transition:enter-end="opacity-100 scale-100"
+            x-transition:leave="transition ease-in duration-100"
+            x-transition:leave-start="opacity-100 scale-100"
+            x-transition:leave-end="opacity-0 scale-95"
+            :style="`top: ${top}px; left: ${left}px;`"
+            class="fixed z-50 w-48 rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 shadow-float py-1 origin-top-right"
+          >
+            <a
+              href="/?pomodoro_task_id={{ item.id }}&pomodoro_task_name={{ item.title | urlencode }}"
+              @click="close()"
+              class="block px-3 py-2.5 text-sm text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+            >Start Pomodoro</a>
+            <button
+              type="button"
+              @click="close(); fetch('/items/{{ item.id }}/snooze', { method: 'POST' }).then(r => {
+                if (r.ok) {
+                  removed = true;
+                  $store.counts['{{ item.lane }}']--;
+                  $store.toast.show('Snoozed', () => {
+                    fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { removed = false; $store.counts['{{ item.lane }}']++; } });
+                  });
+                }
+              })"
+              class="block w-full text-left px-3 py-2.5 text-sm text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+            >Snooze</button>
+            <button
+              type="button"
+              @click="close(); fetch('/items/{{ item.id }}/done', { method: 'POST' }).then(r => {
+                if (r.ok) {
+                  removed = true;
+                  $store.counts['{{ item.lane }}']--;
+                  $store.toast.show('Marked done', () => {
+                    fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { removed = false; $store.counts['{{ item.lane }}']++; } });
+                  });
+                }
+              })"
+              class="block w-full text-left px-3 py-2.5 text-sm text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+            >Done</button>
+            <div class="my-1 border-t border-stone-200 dark:border-stone-700"></div>
+            <button
+              type="button"
+              @click="close(); fetch('/items/{{ item.id }}/dismiss', { method: 'POST' }).then(r => {
+                if (r.ok) {
+                  removed = true;
+                  $store.counts['{{ item.lane }}']--;
+                  $store.toast.show('Dismissed', () => {
+                    fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { removed = false; $store.counts['{{ item.lane }}']++; } });
+                  });
+                }
+              })"
+              class="block w-full text-left px-3 py-2.5 text-sm text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+            >Dismiss</button>
+          </div>
+        </template>
+      </div>
     </div>
   </div>
 </article>
