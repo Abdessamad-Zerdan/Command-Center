@@ -12,7 +12,7 @@ from command_center.db import session
 # No caller passes "pending" to set_item_status today (no reopen/un-snooze
 # endpoint exists yet), but mapping it now means a future reopen feature
 # needs zero changes here.
-_STATUS_EVENT_MAP = {"done": "completed", "snoozed": "snoozed", "pending": "reopened"}
+_STATUS_EVENT_MAP = {"done": "completed", "snoozed": "snoozed", "dismissed": "dismissed", "pending": "reopened"}
 
 
 def log_task_event(

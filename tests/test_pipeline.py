@@ -188,6 +188,37 @@ def test_pipeline_force_resurfaces_already_triaged_item(
     assert "Test subject" in titles
 
 
+def test_dismissed_item_never_resurfaces_on_a_non_force_pull(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same guarantee as the 'done' case above: dismiss uses the same
+    # generic set_item_status() + (source, source_id) INSERT OR IGNORE
+    # dedup, so a dismissed item's row is never re-inserted as pending.
+    monkeypatch.setattr(pipeline, "get_google_credentials", lambda: object())
+    monkeypatch.setattr(pipeline, "GmailSource", _FakeGmailOK)
+    monkeypatch.setattr(pipeline, "CalendarSource", _FakeCalendarEmpty)
+    monkeypatch.setattr(pipeline, "TasksSource", _FakeTasksEmpty)
+    monkeypatch.setattr(pipeline.medium, "fetch_and_rank", lambda: [])
+    monkeypatch.setattr(pipeline.triage, "run", _fake_triage_run)
+
+    pipeline.run()
+    with db.session() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM items WHERE source_id = 'm1'"
+        ).fetchone()["id"]
+    queries.set_item_status(item_id, "dismissed")
+
+    pipeline.run()  # non-force: dedup keeps it out
+    brief = queries.get_brief(_today())
+    assert brief["lanes"]["action_items"] == []
+
+    with db.session() as conn:
+        status = conn.execute(
+            "SELECT status FROM items WHERE id = ?", (item_id,)
+        ).fetchone()["status"]
+    assert status == "dismissed"
+
+
 def test_run_source_merges_degraded_lanes_and_preserves_calendar(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
