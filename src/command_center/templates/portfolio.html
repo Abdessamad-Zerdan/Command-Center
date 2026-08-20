@@ -11,21 +11,83 @@
 <script>
   function pomodoroTimer(initialHistory, initialTimeByTask) {
     return {
+      // --- identity of the current/next work session ---
       taskName: '',
+      taskSourceId: null,
       taskNameDraft: '',
       promptingName: false,
+
+      // --- durations (work + break), quick-select plus free-form ---
       plannedMinutes: 25,
-      remainingSeconds: 25 * 60,
-      running: false,
-      paused: false,
+      customMinutesDraft: '',
+      breakMinutes: 5,
+
+      // --- phase: idle -> working -> ended (break prompt) -> break -> idle ---
+      phase: 'idle',
+
+      // --- live session bookkeeping ---
+      sessionId: null,
+      priorAccumulatedSeconds: 0,   // seconds banked from past run/pause periods of THIS session
+      currentPeriodStartMs: null,   // Date.now() the current running period began; null while paused
+      lastSessionWorkedSeconds: 0,  // for the "X logged" line in the break prompt
+      breakStartMs: null,
+      breakRemainingSeconds: 0,
       intervalId: null,
+      ticksSinceHeartbeat: 0,
+      // Alpine's reactivity is proxy-based — it only re-renders a
+      // binding when a tracked *property* is set, and Date.now() called
+      // fresh inside a getter isn't one. _now is a plain reactive
+      // property, set once a second by tick()'s interval purely so
+      // workedSeconds (and anything computed from it) has something to
+      // depend on and re-evaluate every second — the actual elapsed-time
+      // math still comes from real timestamp subtraction, not a
+      // decremented counter, so it's still immune to setInterval drift.
+      _now: Date.now(),
+
       history: initialHistory,
       timeByTask: initialTimeByTask,
 
+      get running() { return this.phase === 'working' && this.currentPeriodStartMs !== null; },
+      get paused() { return this.phase === 'working' && this.currentPeriodStartMs === null; },
+
+      get workedSeconds() {
+        const live = this.currentPeriodStartMs
+          ? Math.floor((this._now - this.currentPeriodStartMs) / 1000)
+          : 0;
+        return this.priorAccumulatedSeconds + live;
+      },
+
+      get remainingSeconds() {
+        return Math.max(0, this.plannedMinutes * 60 - this.workedSeconds);
+      },
+
       get display() {
-        const m = Math.floor(this.remainingSeconds / 60).toString().padStart(2, '0');
-        const s = (this.remainingSeconds % 60).toString().padStart(2, '0');
+        return this._fmtClock(this.phase === 'break' ? this.breakRemainingSeconds : this.remainingSeconds);
+      },
+
+      _fmtClock(totalSeconds) {
+        const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+        const s = Math.floor(totalSeconds % 60).toString().padStart(2, '0');
         return `${m}:${s}`;
+      },
+
+      init() {
+        this.restore();
+        // A task card's "Start Pomodoro" link only pre-fills — it never
+        // auto-starts — and only when nothing's already running/paused,
+        // so it can't clobber a session already in progress.
+        if (this.phase === 'idle') {
+          const params = new URLSearchParams(window.location.search);
+          const id = params.get('pomodoro_task_id');
+          const name = params.get('pomodoro_task_name');
+          if (name) {
+            this.taskName = name;
+            this.taskSourceId = id ? parseInt(id, 10) : null;
+          }
+        }
+        if (window.location.search.includes('pomodoro_task')) {
+          history.replaceState(null, '', window.location.pathname);
+        }
       },
 
       restore() {
@@ -33,39 +95,48 @@
         if (!raw) return;
         let saved;
         try { saved = JSON.parse(raw); } catch (e) { return; }
-        this.taskName = saved.taskName || '';
-        this.plannedMinutes = saved.plannedMinutes || 25;
+        if (!saved.sessionId) return;
 
-        if (saved.running) {
-          const elapsedSince = Math.floor((Date.now() - saved.savedAtMs) / 1000);
-          const remaining = saved.remainingSeconds - elapsedSince;
-          if (remaining <= 0) {
-            localStorage.removeItem('pomodoro');
-            this.logSession('completed', this.plannedMinutes * 60);
-            this.remainingSeconds = this.plannedMinutes * 60;
+        this.sessionId = saved.sessionId;
+        this.taskName = saved.taskName || '';
+        this.taskSourceId = saved.taskSourceId ?? null;
+        this.plannedMinutes = saved.plannedMinutes || 25;
+        this.priorAccumulatedSeconds = saved.priorAccumulatedSeconds || 0;
+        this.phase = 'working';
+
+        if (saved.currentPeriodStartMs) {
+          // Was actively running when last persisted (including at the
+          // moment the tab/browser closed) — resume counting from that
+          // same start point, so the gap while closed counts too.
+          this.currentPeriodStartMs = saved.currentPeriodStartMs;
+          if (this.workedSeconds >= this.plannedMinutes * 60) {
+            this.finishSession('completed');
           } else {
-            this.remainingSeconds = remaining;
-            this.running = true;
             this.tick();
           }
         } else {
-          this.remainingSeconds = saved.remainingSeconds;
-          this.paused = true;
+          this.currentPeriodStartMs = null;
         }
       },
 
       persist() {
+        if (this.phase !== 'working') {
+          localStorage.removeItem('pomodoro');
+          return;
+        }
         localStorage.setItem('pomodoro', JSON.stringify({
+          sessionId: this.sessionId,
           taskName: this.taskName,
+          taskSourceId: this.taskSourceId,
           plannedMinutes: this.plannedMinutes,
-          remainingSeconds: this.remainingSeconds,
-          running: this.running,
-          savedAtMs: Date.now(),
+          priorAccumulatedSeconds: this.priorAccumulatedSeconds,
+          currentPeriodStartMs: this.currentPeriodStartMs,
         }));
       },
 
       clickMain() {
         if (this.running) { this.pause(); return; }
+        if (this.paused) { this.resume(); return; }
         if (this.taskName.trim()) { this.start(); return; }
         this.taskNameDraft = '';
         this.promptingName = true;
@@ -75,6 +146,7 @@
       confirmName() {
         if (!this.taskNameDraft.trim()) return;
         this.taskName = this.taskNameDraft.trim();
+        this.taskSourceId = null;  // a typed-in name is always anonymous, unlike a task-card-linked one
         this.taskNameDraft = '';
         this.promptingName = false;
         this.start();
@@ -85,83 +157,170 @@
         this.taskNameDraft = '';
       },
 
+      applyCustomMinutes() {
+        const n = parseInt(this.customMinutesDraft, 10);
+        if (n > 0) this.plannedMinutes = n;
+        this.customMinutesDraft = '';
+      },
+
       start() {
-        if (!this.paused) {
-          this.remainingSeconds = this.plannedMinutes * 60;
-        }
-        this.running = true;
-        this.paused = false;
-        this.persist();
+        this.phase = 'working';
+        this.priorAccumulatedSeconds = 0;
+        this.currentPeriodStartMs = Date.now();
+        this.ticksSinceHeartbeat = 0;
+        fetch('/pomodoro/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task_name: this.taskName,
+            planned_minutes: this.plannedMinutes,
+            task_source_id: this.taskSourceId,
+          }),
+        })
+          .then(r => r.json())
+          .then(data => { this.sessionId = data.id; this.persist(); });
         this.tick();
       },
 
       tick() {
         clearInterval(this.intervalId);
         this.intervalId = setInterval(() => {
-          this.remainingSeconds--;
-          if (this.remainingSeconds <= 0) {
-            clearInterval(this.intervalId);
-            this.running = false;
-            this.paused = false;
-            localStorage.removeItem('pomodoro');
-            this.logSession('completed', this.plannedMinutes * 60);
-            this.remainingSeconds = this.plannedMinutes * 60;
-          } else {
-            this.persist();
+          this._now = Date.now();
+          if (this.workedSeconds >= this.plannedMinutes * 60) {
+            this.finishSession('completed');
+            return;
           }
+          this.ticksSinceHeartbeat++;
+          if (this.ticksSinceHeartbeat >= 5) {
+            this.ticksSinceHeartbeat = 0;
+            this.sendHeartbeat();
+          }
+          this.persist();
         }, 1000);
+      },
+
+      sendHeartbeat(extra) {
+        if (!this.sessionId) return;
+        fetch(`/pomodoro/sessions/${this.sessionId}/heartbeat`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          keepalive: true,  // survives a tab close mid-request, unlike a plain fetch
+          body: JSON.stringify({ elapsed_seconds: this.workedSeconds, ...extra }),
+        });
       },
 
       pause() {
         clearInterval(this.intervalId);
-        this.running = false;
-        this.paused = true;
+        this.priorAccumulatedSeconds = this.workedSeconds;
+        this.currentPeriodStartMs = null;
+        this.sendHeartbeat({ paused: true });
         this.persist();
       },
 
-      reset() {
-        clearInterval(this.intervalId);
-        const elapsed = this.plannedMinutes * 60 - this.remainingSeconds;
-        if (elapsed > 0) {
-          this.logSession('stopped_early', elapsed);
-        }
-        this.running = false;
-        this.paused = false;
-        this.taskName = '';
-        this.remainingSeconds = this.plannedMinutes * 60;
-        localStorage.removeItem('pomodoro');
+      resume() {
+        this.currentPeriodStartMs = Date.now();
+        this.ticksSinceHeartbeat = 0;
+        this.sendHeartbeat({ resumed: true });
+        this.persist();
+        this.tick();
       },
 
-      logSession(status, elapsedSeconds) {
+      // Explicit early stop — the "Reset" button. Distinct from
+      // finishSession('completed'), which is the timer running out on
+      // its own.
+      reset() {
+        this.finishSession('stopped_early');
+      },
+
+      finishSession(status) {
+        clearInterval(this.intervalId);
+        const worked = Math.min(this.workedSeconds, this.plannedMinutes * 60);
         const taskName = this.taskName;
-        const plannedMinutes = this.plannedMinutes;
-        fetch('/pomodoro/sessions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            task_name: taskName,
-            planned_minutes: plannedMinutes,
-            elapsed_seconds: elapsedSeconds,
-            status: status,
-          }),
-        })
-          .then(r => r.json())
-          .then(data => {
-            this.history.unshift({
-              id: data.id,
-              task_name: taskName,
-              planned_minutes: plannedMinutes,
-              elapsed_seconds: elapsedSeconds,
-              status: status,
-            });
-            const existing = this.timeByTask.find(t => t.task_name === taskName);
-            if (existing) {
-              existing.total_seconds += elapsedSeconds;
-            } else {
-              this.timeByTask.push({ task_name: taskName, total_seconds: elapsedSeconds });
-            }
-            this.timeByTask.sort((a, b) => b.total_seconds - a.total_seconds);
+        const sessionId = this.sessionId;
+        localStorage.removeItem('pomodoro');
+
+        const applyLocally = () => {
+          this.history.unshift({
+            id: sessionId, task_name: taskName, planned_minutes: this.plannedMinutes,
+            elapsed_seconds: worked, status: status,
           });
+          const existing = this.timeByTask.find(t => t.task_name === taskName);
+          if (existing) { existing.total_seconds += worked; }
+          else { this.timeByTask.push({ task_name: taskName, total_seconds: worked }); }
+          this.timeByTask.sort((a, b) => b.total_seconds - a.total_seconds);
+        };
+
+        if (sessionId) {
+          fetch(`/pomodoro/sessions/${sessionId}/finish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            keepalive: true,
+            body: JSON.stringify({ elapsed_seconds: worked, status: status }),
+          }).then(() => applyLocally());
+        }
+
+        this.currentPeriodStartMs = null;
+        this.priorAccumulatedSeconds = 0;
+        this.lastSessionWorkedSeconds = worked;
+
+        if (status === 'completed') {
+          this.phase = 'ended';  // take-a-break prompt — timer UI is NOT reset to a fresh countdown
+        } else {
+          this.phase = 'idle';
+          this.taskName = '';
+          this.taskSourceId = null;
+          this.sessionId = null;
+        }
+      },
+
+      startBreak() {
+        this.phase = 'break';
+        this.breakStartMs = Date.now();
+        this.breakRemainingSeconds = this.breakMinutes * 60;
+        clearInterval(this.intervalId);
+        this.intervalId = setInterval(() => {
+          const elapsed = Math.floor((Date.now() - this.breakStartMs) / 1000);
+          this.breakRemainingSeconds = Math.max(0, this.breakMinutes * 60 - elapsed);
+          if (this.breakRemainingSeconds <= 0) this.endBreak();
+        }, 1000);
+      },
+
+      endBreak() {
+        clearInterval(this.intervalId);
+        const breakSeconds = this.breakStartMs
+          ? Math.min(this.breakMinutes * 60, Math.floor((Date.now() - this.breakStartMs) / 1000))
+          : 0;
+        const sessionId = this.sessionId;
+        if (sessionId) {
+          fetch(`/pomodoro/sessions/${sessionId}/finish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              elapsed_seconds: this.lastSessionWorkedSeconds,
+              status: 'completed',
+              break_duration_sec: breakSeconds,
+            }),
+          });
+        }
+        this.backToIdle();
+      },
+
+      backToIdle() {
+        this.phase = 'idle';
+        this.taskName = '';
+        this.taskSourceId = null;
+        this.sessionId = null;
+        this.breakStartMs = null;
+      },
+
+      // beforeunload: a plain fetch can get cancelled mid-flight when the
+      // page unloads. keepalive:true (used on every heartbeat/finish
+      // call above already) is what actually makes the browser-close
+      // case reliable — this handler's job is just to force one last
+      // save right at the moment of closing, not to wait for the next
+      // scheduled 5s tick.
+      handleUnload() {
+        if (this.running) this.sendHeartbeat();
       },
 
       deleteSession(id) {
@@ -222,25 +381,37 @@
       class="animate-in mt-8 w-full max-w-sm"
       style="animation-delay: .1s;"
       x-data='pomodoroTimer({{ pomodoro_history | tojson }}, {{ time_by_task | tojson }})'
-      x-init="restore()"
+      @beforeunload.window="handleUnload()"
     >
       <div class="h-5 text-sm text-stone-500 dark:text-stone-400" x-show="taskName" x-text="taskName"></div>
 
-      <div class="mt-1 font-['Fraunces'] text-7xl sm:text-9xl tabular-nums text-stone-900 dark:text-stone-100" x-text="display"></div>
+      <div
+        class="mt-1 font-['Fraunces'] text-7xl sm:text-9xl tabular-nums text-stone-900 dark:text-stone-100"
+        x-text="display"
+      ></div>
 
-      <div class="mt-2 flex items-center justify-center gap-1.5" x-show="!running && !paused && !promptingName">
+      <div class="mt-2 flex items-center justify-center gap-1.5 flex-wrap" x-show="phase === 'idle' && !promptingName">
         <template x-for="m in [25, 15, 5]" :key="m">
           <button
             type="button"
-            @click="plannedMinutes = m; remainingSeconds = m * 60"
+            @click="plannedMinutes = m"
             :class="plannedMinutes === m ? 'text-rust dark:text-rust-light' : 'text-stone-400 dark:text-stone-500'"
             class="text-xs px-2 py-0.5 hover:text-stone-900 dark:hover:text-stone-100"
             x-text="m + 'm'"
           ></button>
         </template>
+        <input
+          type="number"
+          min="1"
+          x-model="customMinutesDraft"
+          @keydown.enter="applyCustomMinutes()"
+          @blur="applyCustomMinutes()"
+          placeholder="custom"
+          class="w-16 text-xs text-center bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1.5 py-0.5 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+        >
       </div>
 
-      <div class="mt-6" x-show="!promptingName">
+      <div class="mt-6" x-show="(phase === 'idle' || phase === 'working') && !promptingName">
         <div class="flex items-center justify-center gap-2">
           <button
             type="button"
@@ -279,6 +450,44 @@
             @click="cancelPrompt()"
             class="text-xs px-4 py-2 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100"
           >Cancel</button>
+        </div>
+      </div>
+
+      <div class="mt-6" x-show="phase === 'ended'" x-transition.opacity>
+        <p class="text-sm text-stone-600 dark:text-stone-300">
+          <span x-text="formatDuration(lastSessionWorkedSeconds)"></span> logged. Take a break?
+        </p>
+        <div class="mt-2 flex items-center justify-center gap-1.5">
+          <input
+            type="number"
+            min="1"
+            x-model.number="breakMinutes"
+            class="w-14 text-xs text-center bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1.5 py-0.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+          >
+          <span class="text-xs text-stone-400 dark:text-stone-500">min suggested</span>
+        </div>
+        <div class="mt-3 flex items-center justify-center gap-2">
+          <button
+            type="button"
+            @click="startBreak()"
+            class="text-xs px-4 py-2 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium"
+          >Start break</button>
+          <button
+            type="button"
+            @click="endBreak()"
+            class="text-xs px-4 py-2 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100"
+          >Skip</button>
+        </div>
+      </div>
+
+      <div class="mt-6" x-show="phase === 'break'" x-transition.opacity>
+        <p class="text-sm text-stone-600 dark:text-stone-300">On break</p>
+        <div class="mt-3">
+          <button
+            type="button"
+            @click="endBreak()"
+            class="text-xs px-4 py-2 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100"
+          >End break</button>
         </div>
       </div>
 

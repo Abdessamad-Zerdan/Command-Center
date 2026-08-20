@@ -54,9 +54,18 @@ CREATE INDEX IF NOT EXISTS idx_calendar_events_brief_date ON calendar_events (br
 CREATE TABLE IF NOT EXISTS pomodoro_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_name TEXT NOT NULL,
+    -- Soft reference, same convention as task_events.task_id (see
+    -- queries.log_task_event's docstring): a session logged against an
+    -- item stays a valid historical time-tracking fact even after that
+    -- items row is later completed, moved, or deleted — no FK
+    -- constraint to enforce or break.
+    task_source_id INTEGER,
     planned_minutes INTEGER NOT NULL,
     elapsed_seconds INTEGER NOT NULL,
+    break_duration_sec INTEGER,
     started_at TEXT NOT NULL,
+    paused_at TEXT,
+    resumed_at TEXT,
     ended_at TEXT NOT NULL,
     status TEXT NOT NULL
 );
@@ -240,6 +249,12 @@ _MIGRATED_COLUMNS: dict[str, dict[str, str]] = {
     },
     "briefs": {
         "is_fixture": "INTEGER NOT NULL DEFAULT 0",
+    },
+    "pomodoro_sessions": {
+        "task_source_id": "INTEGER",
+        "break_duration_sec": "INTEGER",
+        "paused_at": "TEXT",
+        "resumed_at": "TEXT",
     },
 }
 
