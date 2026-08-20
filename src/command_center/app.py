@@ -364,6 +364,17 @@ def mark_snoozed(item_id: int):
     return {"ok": True}
 
 
+@app.post("/items/{item_id}/dismiss")
+def dismiss_item(item_id: int):
+    # Same dedup guarantee as done/snoozed: get_brief() only ever selects
+    # status = 'pending', and save_triage_results() dedups new pulls on
+    # the item's (source, source_id) via INSERT OR IGNORE — so a
+    # dismissed item's row is never re-inserted as 'pending' by a later
+    # triage run, meaning it never resurfaces on a future brief.
+    queries.set_item_status(item_id, "dismissed")
+    return {"ok": True}
+
+
 @app.post("/items/{item_id}/move-to-today")
 def move_item_to_today(item_id: int):
     moved = queries.move_item_to_date(item_id, _today())
@@ -390,7 +401,7 @@ def move_item_to_date_route(item_id: int, payload: MoveToDateIn):
 
 @app.post("/items/{item_id}/reopen")
 def reopen_item(item_id: int):
-    # Undo for snooze/done — sets status back to 'pending' without
+    # Undo for snooze/done/dismiss — sets status back to 'pending' without
     # touching brief_date/lane. No caller did this before the undo
     # toast; set_item_status has always supported it (see its own
     # _STATUS_EVENT_MAP, logged as "reopened").

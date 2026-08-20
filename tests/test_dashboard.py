@@ -179,6 +179,25 @@ def test_mark_done_removes_item_and_persists(client: TestClient) -> None:
     assert status == "done"
 
 
+def test_mark_dismissed_removes_item_and_persists(client: TestClient) -> None:
+    with db.session() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM items WHERE title LIKE 'Production alert%'"
+        ).fetchone()["id"]
+
+    dismiss_response = client.post(f"/items/{item_id}/dismiss")
+    assert dismiss_response.status_code == 200
+
+    dashboard = client.get("/brief")
+    assert "Production alert: payment webhook failing" not in dashboard.text
+
+    with db.session() as conn:
+        status = conn.execute(
+            "SELECT status FROM items WHERE id = ?", (item_id,)
+        ).fetchone()["status"]
+    assert status == "dismissed"
+
+
 def _seed_past_item(brief_date: str, lane: str, title: str) -> int:
     with db.session() as conn:
         conn.execute(
@@ -250,6 +269,21 @@ def test_reopen_route_sets_status_back_to_pending(client: TestClient) -> None:
     assert status == "pending"
 
 
+def test_reopen_route_undoes_a_dismiss(client: TestClient) -> None:
+    with db.session() as conn:
+        item_id = conn.execute(
+            "SELECT id FROM items WHERE title LIKE 'Production alert%'"
+        ).fetchone()["id"]
+    client.post(f"/items/{item_id}/dismiss")
+
+    response = client.post(f"/items/{item_id}/reopen")
+
+    assert response.status_code == 200
+    with db.session() as conn:
+        status = conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()["status"]
+    assert status == "pending"
+
+
 def test_item_card_buttons_wire_up_toast_undo(client: TestClient) -> None:
     # Regression guard for the undo-toast feature: each mutating button
     # must call $store.toast.show with an undo callback, not just hide
@@ -257,6 +291,7 @@ def test_item_card_buttons_wire_up_toast_undo(client: TestClient) -> None:
     response = client.get("/brief")
     assert "$store.toast.show('Snoozed'" in response.text
     assert "$store.toast.show('Marked done'" in response.text
+    assert "$store.toast.show('Dismissed'" in response.text
     assert "/reopen" in response.text
 
 
