@@ -26,6 +26,9 @@
     <h3 class="min-w-0 flex-1 break-words font-serif text-base text-stone-900 dark:text-stone-100 leading-snug">{{ item.title }}</h3>
     <span class="shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-700 text-stone-500 dark:text-stone-400">{{ item.source }}</span>
   </div>
+  {% if item.time_logged_display %}
+  <p class="mt-1 text-[11px] text-stone-400 dark:text-stone-500">Time logged: {{ item.time_logged_display }}</p>
+  {% endif %}
   {% if item.why_it_matters %}
   <p class="mt-1.5 text-[15px] text-stone-600 dark:text-stone-300 leading-[1.4] break-words">{{ item.why_it_matters }}</p>
   {% endif %}
@@ -58,6 +61,11 @@
         class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
       >Bring to today</button>
       {% endif %}
+      <a
+        href="/?pomodoro_task_id={{ item.id }}&pomodoro_task_name={{ item.title | urlencode }}"
+        @click.stop
+        class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
+      >Start Pomodoro</a>
       <button
         type="button"
         @click.stop="fetch('/items/{{ item.id }}/snooze', { method: 'POST' }).then(r => {

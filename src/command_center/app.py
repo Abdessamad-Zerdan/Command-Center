@@ -175,6 +175,31 @@ def _lane_counts(lanes: dict[str, list[dict]]) -> dict[str, int]:
     }
 
 
+def _format_duration(total_seconds: int) -> str:
+    """Xm under an hour, Xh Ym (no trailing '0m') at or above — same
+    convention the Pomodoro widget's own client-side formatDuration()
+    already uses, kept consistent rather than introducing a second
+    duration format in the same app."""
+    mins = round(total_seconds / 60)
+    if mins < 60:
+        return f"{mins}m"
+    h, m = divmod(mins, 60)
+    return f"{h}h {m}m" if m else f"{h}h"
+
+
+def _annotate_time_logged(lanes: dict[str, list[dict]]) -> None:
+    """Mutates each item in-place with time_logged_seconds (0 if
+    nothing's been logged, not just absent) and a pre-formatted
+    time_logged_display for the "Time logged: 2h 30m" badge — total
+    Pomodoro time ever logged against it, across every lane."""
+    all_items = [item for items in lanes.values() for item in items]
+    totals = queries.get_time_logged_by_source_ids([item["id"] for item in all_items])
+    for item in all_items:
+        seconds = totals.get(item["id"], 0)
+        item["time_logged_seconds"] = seconds
+        item["time_logged_display"] = _format_duration(seconds) if seconds else None
+
+
 def _health_snapshot() -> dict:
     """Structural, no-live-network snapshot — same philosophy as
     setup_wizard/status.py's is_setup_complete(): reports what's
@@ -240,6 +265,7 @@ def dashboard(request: Request):
         # the first real pull hasn't landed yet" case.
         return templates.TemplateResponse(request, "brief_not_ready.html", {})
 
+    _annotate_time_logged(brief["lanes"])
     now = datetime.now(TZ)
     return templates.TemplateResponse(
         request,
@@ -276,6 +302,7 @@ def history_detail(request: Request, brief_date: str):
     if brief is None:
         raise HTTPException(status_code=404, detail="No brief for that date")
 
+    _annotate_time_logged(brief["lanes"])
     now = datetime.now(TZ)
     return templates.TemplateResponse(
         request,
@@ -314,6 +341,7 @@ def lanes_partial(request: Request, date: str | None = None):
     if brief is None:
         raise HTTPException(status_code=404, detail="No brief for that date")
 
+    _annotate_time_logged(brief["lanes"])
     html = templates.env.get_template("partials/lanes.html").render(
         request=request,
         brief=brief,
@@ -384,26 +412,66 @@ def rerun():
     return RedirectResponse(url="/brief", status_code=303)
 
 
-class PomodoroSessionIn(BaseModel):
+class PomodoroStartIn(BaseModel):
     task_name: str
     planned_minutes: int
-    elapsed_seconds: int
-    status: str  # "completed" | "stopped_early"
+    task_source_id: int | None = None
 
 
 @app.post("/pomodoro/sessions")
-def create_pomodoro_session(payload: PomodoroSessionIn):
-    ended_at = datetime.now(TZ)
-    started_at = ended_at - timedelta(seconds=payload.elapsed_seconds)
-    session_id = queries.create_pomodoro_session(
-        task_name=payload.task_name,
+def start_pomodoro_session(payload: PomodoroStartIn):
+    if not payload.task_name.strip():
+        raise HTTPException(status_code=400, detail="Task name can't be empty")
+    if payload.planned_minutes <= 0:
+        raise HTTPException(status_code=400, detail="Planned duration must be positive")
+    session_id = queries.start_pomodoro_session(
+        task_name=payload.task_name.strip(),
         planned_minutes=payload.planned_minutes,
-        elapsed_seconds=payload.elapsed_seconds,
-        started_at=started_at.isoformat(),
-        ended_at=ended_at.isoformat(),
-        status=payload.status,
+        task_source_id=payload.task_source_id,
     )
     return {"id": session_id}
+
+
+class PomodoroHeartbeatIn(BaseModel):
+    elapsed_seconds: int
+    paused: bool = False
+    resumed: bool = False
+
+
+@app.patch("/pomodoro/sessions/{session_id}/heartbeat")
+def heartbeat_pomodoro_session(session_id: int, payload: PomodoroHeartbeatIn):
+    now = datetime.now(TZ).isoformat()
+    updated = queries.update_pomodoro_heartbeat(
+        session_id,
+        elapsed_seconds=max(0, payload.elapsed_seconds),
+        paused_at=now if payload.paused else None,
+        resumed_at=now if payload.resumed else None,
+    )
+    if not updated:
+        # Not an error the widget should surface — a heartbeat racing a
+        # finish (or a stale one from a since-abandoned session) is a
+        # timing fact of life, not something the user did wrong.
+        return JSONResponse({"ok": False}, status_code=404)
+    return {"ok": True}
+
+
+class PomodoroFinishIn(BaseModel):
+    elapsed_seconds: int
+    status: str  # "completed" | "stopped_early"
+    break_duration_sec: int | None = None
+
+
+@app.post("/pomodoro/sessions/{session_id}/finish")
+def finish_pomodoro_session(session_id: int, payload: PomodoroFinishIn):
+    row = queries.finish_pomodoro_session(
+        session_id,
+        elapsed_seconds=max(0, payload.elapsed_seconds),
+        status=payload.status,
+        break_duration_sec=payload.break_duration_sec,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return row
 
 
 class ManualItemIn(BaseModel):
