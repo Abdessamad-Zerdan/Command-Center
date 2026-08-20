@@ -103,7 +103,7 @@
       <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
       <div class="flex items-baseline gap-2">
         <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">{{ brief.brief_date }}</h1>
-        <span class="text-sm text-stone-500 dark:text-stone-400" x-data="clock()" x-init="tick(); setInterval(tick, 1000)" x-text="display"></span>
+        <span class="clock-pulse text-sm font-medium tabular-nums text-stone-500 dark:text-stone-400" x-data="clock()" x-init="tick(); setInterval(tick, 1000)" x-text="display"></span>
       </div>
     </div>
     <div class="flex items-center gap-3 sm:gap-4">
@@ -146,11 +146,12 @@
 {% endif %}
 
 {% if nudges %}
-<div class="mx-4 sm:mx-6 mt-3 space-y-1.5" x-data="{ dismissed: [] }">
+<div class="mx-4 sm:mx-6 mt-3 space-y-1.5" x-data="{ dismissed: [] }" data-reveal>
   {% for nudge in nudges %}
   <div
     x-show="!dismissed.includes('{{ nudge.id }}')"
-    class="flex items-start justify-between gap-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300"
+    x-transition
+    class="card-lift flex items-start justify-between gap-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300"
   >
     <span>{{ nudge.message }}</span>
     <button
@@ -163,9 +164,9 @@
 </div>
 {% endif %}
 
-<section class="px-4 sm:px-6 py-4">
+<section class="px-4 sm:px-6 py-4" data-reveal>
   <div class="text-xs text-stone-500 dark:text-stone-400 mb-1.5">Today</div>
-  <div class="relative h-14 rounded-md bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700">
+  <div class="card-lift relative h-14 rounded-md bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700">
     {% for ev in events %}
     <div
       class="absolute top-1.5 bottom-1.5 rounded bg-stone-200 dark:bg-stone-700 border border-stone-300 dark:border-stone-600 px-1.5 flex items-center overflow-hidden"
@@ -177,7 +178,7 @@
     {% endfor %}
     {% if not is_history %}
     <div class="absolute top-0 bottom-0 w-px bg-rust dark:bg-rust-light" style="left: {{ now_pct }}%;">
-      <div class="absolute -top-1 -translate-x-1/2 w-2 h-2 rounded-full bg-rust dark:bg-rust-light"></div>
+      <div class="absolute -top-1 -translate-x-1/2 w-2 h-2 rounded-full bg-rust dark:bg-rust-light animate-pulse"></div>
     </div>
     {% endif %}
   </div>
@@ -210,7 +211,7 @@
       x-transition:leave="transition ease-in duration-150"
       x-transition:leave-start="opacity-100 scale-100"
       x-transition:leave-end="opacity-0 scale-95"
-      class="bg-white dark:bg-stone-800 rounded-lg border border-stone-200 dark:border-stone-700 p-5 max-w-md w-full max-h-[80vh] overflow-y-auto"
+      class="shadow-float bg-white/95 dark:bg-stone-800/95 backdrop-blur-md rounded-lg border border-stone-200 dark:border-stone-700 p-5 max-w-md w-full max-h-[80vh] overflow-y-auto"
     >
       <div>
         <div class="flex items-start justify-between gap-2">
@@ -297,7 +298,13 @@
 <div x-data="assistantWidget()" class="fixed bottom-4 right-4 z-30">
   <template x-if="open">
     <div
-      class="mb-3 w-80 sm:w-96 rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 shadow-xl flex flex-col"
+      x-transition:enter="transition ease-out duration-200"
+      x-transition:enter-start="opacity-0 scale-95 translate-y-2"
+      x-transition:enter-end="opacity-100 scale-100 translate-y-0"
+      x-transition:leave="transition ease-in duration-150"
+      x-transition:leave-start="opacity-100 scale-100"
+      x-transition:leave-end="opacity-0 scale-95"
+      class="shadow-float mb-3 w-80 sm:w-96 rounded-lg border border-stone-200 dark:border-stone-700 bg-white/95 dark:bg-stone-800/95 backdrop-blur-md flex flex-col"
       style="height: 480px;"
     >
       <div class="flex items-center justify-between px-3 py-2 border-b border-stone-200 dark:border-stone-700">
@@ -379,8 +386,10 @@
         </template>
         <template x-if="thinking">
           <div class="flex justify-start">
-            <div class="max-w-[85%] rounded-lg px-2.5 py-1.5 text-xs bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 text-stone-400 dark:text-stone-500 italic">
-              Thinking&hellip;
+            <div class="max-w-[85%] rounded-lg px-3 py-2 text-xs bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-stone-300 dark:bg-stone-600" style="animation: thinkDot 1.1s ease-in-out infinite; animation-delay: 0ms;"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-stone-300 dark:bg-stone-600" style="animation: thinkDot 1.1s ease-in-out infinite; animation-delay: 150ms;"></span>
+              <span class="w-1.5 h-1.5 rounded-full bg-stone-300 dark:bg-stone-600" style="animation: thinkDot 1.1s ease-in-out infinite; animation-delay: 300ms;"></span>
             </div>
           </div>
         </template>
@@ -408,7 +417,7 @@
     type="button"
     @click="open = !open"
     aria-label="Toggle assistant"
-    class="w-12 h-12 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white flex items-center justify-center shadow-lg ml-auto"
+    class="card-lift w-12 h-12 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white flex items-center justify-center ml-auto"
   >
     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
   </button>

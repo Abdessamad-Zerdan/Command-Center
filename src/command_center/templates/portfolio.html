@@ -387,6 +387,7 @@
 
       <div
         class="mt-1 font-['Fraunces'] text-7xl sm:text-9xl tabular-nums text-stone-900 dark:text-stone-100"
+        :class="phase === 'working' ? 'timer-alive' : ''"
         x-text="display"
       ></div>
 
@@ -416,7 +417,7 @@
           <button
             type="button"
             @click="clickMain()"
-            class="text-xs px-4 py-2 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap"
+            class="card-lift text-xs px-4 py-2 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap"
           >
             <span x-text="running ? 'Pause' : (paused ? 'Resume' : 'Start')"></span>
           </button>
@@ -548,7 +549,7 @@
       </template>
     </div>
 
-    <a href="/brief" class="animate-in mt-10 block w-full max-w-sm rounded-lg border border-stone-200 dark:border-stone-700 hover:border-rust dark:hover:border-rust-light transition-colors p-4 text-left" style="animation-delay: .15s;">
+    <a href="/brief" class="card-lift animate-in mt-10 block w-full max-w-sm rounded-lg border border-stone-200 dark:border-stone-700 bg-white/60 dark:bg-stone-800/40 backdrop-blur-sm hover:border-rust dark:hover:border-rust-light p-4 text-left" style="animation-delay: .15s;">
       <div class="text-xs uppercase tracking-wide text-stone-500 dark:text-stone-400">Today's brief &middot; {{ brief_date_short }}</div>
       <div class="mt-1 text-sm text-stone-700 dark:text-stone-300">{{ tasks_count }} tasks &middot; {{ due_today_count }} due today</div>
     </a>

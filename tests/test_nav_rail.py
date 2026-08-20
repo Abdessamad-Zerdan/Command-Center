@@ -105,20 +105,21 @@ def test_rail_item_labels_are_not_gated_by_the_tooltip_settings_toggle(client: T
 def test_rail_slides_out_horizontally_to_the_left_of_the_trigger(client: TestClient) -> None:
     response = client.get("/brief")
     assert response.status_code == 200
-    assert 'class="nav-rail absolute right-full top-0 mr-2 flex items-center gap-1.5' in response.text
+    assert 'class="nav-rail shadow-float absolute right-full top-0 mr-2 flex items-center gap-1.5' in response.text
 
 
 def test_rail_has_a_solid_background_behind_its_icons(client: TestClient) -> None:
     # Regression guard: the rail must render as a distinct panel, not a
     # bare row of icons floating over whatever page content is beneath —
     # a real user-reported confusion the individual icons' own
-    # semi-transparent pills didn't fully solve.
+    # semi-transparent pills didn't fully solve. bg-white/90 + backdrop-blur
+    # is still an opaque-reading panel (glassmorphism, not a bare row).
     response = client.get("/brief")
     assert response.status_code == 200
     assert (
-        'class="nav-rail absolute right-full top-0 mr-2 flex items-center gap-1.5 '
+        'class="nav-rail shadow-float absolute right-full top-0 mr-2 flex items-center gap-1.5 '
         'rounded-full border border-stone-200 dark:border-stone-700 '
-        'bg-white dark:bg-stone-800 shadow-lg px-1.5 py-1.5"'
+        'bg-white/90 dark:bg-stone-800/90 backdrop-blur-md px-1.5 py-1.5"'
     ) in response.text
 
 

@@ -116,6 +116,23 @@
       },
     };
   }
+
+  // Scroll reveal: any element with [data-reveal] rises + fades in the
+  // first time it enters the viewport. No Alpine plugin required (only
+  // core alpinejs is loaded) — plain IntersectionObserver instead.
+  document.addEventListener('DOMContentLoaded', () => {
+    const revealEls = document.querySelectorAll('[data-reveal]');
+    if (!revealEls.length) return;
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          io.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+    revealEls.forEach((el) => io.observe(el));
+  });
 </script>
 <style>
   ::-webkit-scrollbar { height: 8px; width: 8px; }
@@ -143,10 +160,190 @@
     transform: translateX(0);
     pointer-events: auto;
   }
+
+  /* ---------- Motion, depth, ambient life ---------- */
+
+  /* Native cross-document page transitions — zero JS, ignored gracefully
+     by browsers that don't support it yet. */
+  @view-transition {
+    navigation: auto;
+  }
+
+  :root {
+    --shadow-float: 0 1px 2px rgba(41, 33, 27, 0.04), 0 2px 6px -2px rgba(41, 33, 27, 0.06), 0 12px 28px -10px rgba(41, 33, 27, 0.12);
+    --shadow-float-hover: 0 2px 4px rgba(41, 33, 27, 0.05), 0 4px 10px -2px rgba(41, 33, 27, 0.08), 0 20px 40px -12px rgba(41, 33, 27, 0.18);
+  }
+  .dark {
+    --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.2), 0 2px 6px -2px rgba(0, 0, 0, 0.3), 0 12px 28px -10px rgba(0, 0, 0, 0.5);
+    --shadow-float-hover: 0 2px 4px rgba(0, 0, 0, 0.25), 0 4px 10px -2px rgba(0, 0, 0, 0.35), 0 20px 40px -12px rgba(0, 0, 0, 0.6);
+  }
+
+  /* Ambient mesh: two soft blurred blobs drifting slowly behind the app.
+     transform/opacity only — stays on the compositor thread so it costs
+     nothing no matter how long it runs. */
+  .ambient-mesh {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .ambient-mesh::before,
+  .ambient-mesh::after {
+    content: '';
+    position: absolute;
+    width: 60vmax;
+    height: 60vmax;
+    border-radius: 50%;
+    filter: blur(90px);
+    will-change: transform;
+  }
+  .ambient-mesh::before {
+    top: -22vmax;
+    left: -12vmax;
+    background: radial-gradient(circle, #d97757 0%, transparent 70%);
+    opacity: 0.30;
+    animation: meshDrift1 55s ease-in-out infinite;
+  }
+  .ambient-mesh::after {
+    bottom: -26vmax;
+    right: -16vmax;
+    background: radial-gradient(circle, #b5563a 0%, transparent 70%);
+    opacity: 0.18;
+    animation: meshDrift2 65s ease-in-out infinite;
+  }
+  .dark .ambient-mesh::before { opacity: 0.12; }
+  .dark .ambient-mesh::after { opacity: 0.09; }
+  @keyframes meshDrift1 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(8vmax, 6vmax) scale(1.12); }
+    66% { transform: translate(-4vmax, 10vmax) scale(0.94); }
+  }
+  @keyframes meshDrift2 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(-6vmax, -8vmax) scale(1.1); }
+    66% { transform: translate(5vmax, -5vmax) scale(0.96); }
+  }
+
+  /* Static ambient shadow with no transition of its own — safe to drop
+     onto anything (modals, panels) without fighting a transition that
+     element already owns, e.g. Alpine's class-based enter/leave. */
+  .shadow-float {
+    box-shadow: var(--shadow-float);
+  }
+
+  /* Cards that float above the surface: soft ambient shadow, subtle
+     rise on hover, nothing that fights the click. Includes
+     background-color/color/opacity so that a <button> which is also
+     .card-lift (e.g. the assistant toggle) doesn't lose the plain
+     `button` rule's hover-color smoothing to this rule's higher
+     class-selector specificity. */
+  .card-lift {
+    box-shadow: var(--shadow-float);
+    transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1), border-color 220ms ease, background-color 150ms ease, color 150ms ease, opacity 150ms ease;
+  }
+  .card-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-float-hover);
+  }
+  /* Same reasoning for [data-reveal]: its own transition governs the
+     scroll-in fade, so the combined selector explicitly carries both
+     concerns (reveal fade + hover lift) instead of letting whichever
+     rule is later in the stylesheet silently win outright. */
+  [data-reveal].card-lift {
+    transition: opacity 650ms cubic-bezier(0.22, 1, 0.36, 1), transform 320ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1), border-color 220ms ease;
+  }
+  /* [data-reveal].is-visible pins transform to translateY(0) at the same
+     (0,0,2,0) specificity as .card-lift:hover — without this higher-
+     specificity override, the hover lift would never win once a card
+     has revealed. */
+  [data-reveal].card-lift.is-visible:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-float-hover);
+  }
+
+  /* Every button gets a snappy, ease-cushioned press; every link gets a
+     smooth hover instead of colors snapping instantly. */
+  button, input[type="submit"], input[type="button"] {
+    transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1), background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+  }
+  button:active:not(:disabled), input[type="submit"]:active:not(:disabled), input[type="button"]:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+  a {
+    transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease, opacity 150ms ease;
+  }
+
+  /* Skeleton shimmer for anything loading — soft pulse, not a blank wait. */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: #ece3d8;
+  }
+  .dark .skeleton { background: #2c2823; }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+  .dark .skeleton::after {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+  }
+  @keyframes shimmer {
+    100% { transform: translateX(100%); }
+  }
+
+  /* Scroll reveal: [data-reveal] elements rise + fade in once visible,
+     driven by a plain IntersectionObserver (no Alpine plugin loaded). */
+  [data-reveal] {
+    opacity: 0;
+    transform: translateY(14px);
+    transition: opacity 650ms cubic-bezier(0.22, 1, 0.36, 1), transform 650ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  [data-reveal].is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  [data-reveal][data-reveal-delay="1"] { transition-delay: 50ms; }
+  [data-reveal][data-reveal-delay="2"] { transition-delay: 100ms; }
+  [data-reveal][data-reveal-delay="3"] { transition-delay: 150ms; }
+  [data-reveal][data-reveal-delay="4"] { transition-delay: 200ms; }
+  [data-reveal][data-reveal-delay="5"] { transition-delay: 250ms; }
+  [data-reveal][data-reveal-delay="6"] { transition-delay: 300ms; }
+
+  /* A ticking clock that breathes instead of just jumping every second. */
+  .clock-pulse {
+    animation: clockBreathe 3s ease-in-out infinite;
+  }
+  @keyframes clockBreathe {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1; }
+  }
+  @keyframes thinkDot {
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-2px); }
+  }
+  @keyframes timerAlive {
+    0%, 100% { text-shadow: 0 0 0 rgba(181, 86, 58, 0); }
+    50% { text-shadow: 0 0 28px rgba(181, 86, 58, 0.28); }
+  }
+  .timer-alive { animation: timerAlive 2.4s ease-in-out infinite; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ambient-mesh::before, .ambient-mesh::after { animation: none; }
+    .clock-pulse { animation: none; }
+    .timer-alive { animation: none; }
+    [data-reveal] { opacity: 1; transform: none; transition: none; }
+    ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+  }
 </style>
 {% block extra_head %}{% endblock %}
 </head>
 <body class="bg-[#faf6f1] dark:bg-stone-900 text-stone-900 dark:text-stone-100 min-h-screen antialiased">
+<div class="ambient-mesh" aria-hidden="true"></div>
 
 {% set nav_path = request.url.path %}
 {% set nav_items = [
@@ -199,7 +396,7 @@
   </button>
   <nav
     :class="{ 'nav-rail-open': open }"
-    class="nav-rail absolute right-full top-0 mr-2 flex items-center gap-1.5 rounded-full border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 shadow-lg px-1.5 py-1.5"
+    class="nav-rail shadow-float absolute right-full top-0 mr-2 flex items-center gap-1.5 rounded-full border border-stone-200 dark:border-stone-700 bg-white/90 dark:bg-stone-800/90 backdrop-blur-md px-1.5 py-1.5"
     aria-label="Navigation"
   >
     {% for item in nav_items %}
@@ -232,7 +429,7 @@
   x-data
   x-show="$store.toast.visible"
   x-transition
-  class="fixed bottom-4 left-1/2 -translate-x-1/2 sm:left-4 sm:translate-x-0 z-40 flex items-center gap-3 rounded-lg bg-stone-800 dark:bg-stone-100 text-stone-100 dark:text-stone-900 text-xs px-4 py-2.5 shadow-lg"
+  class="card-lift fixed bottom-4 left-1/2 -translate-x-1/2 sm:left-4 sm:translate-x-0 z-40 flex items-center gap-3 rounded-lg bg-stone-800 dark:bg-stone-100 text-stone-100 dark:text-stone-900 text-xs px-4 py-2.5"
 >
   <span x-text="$store.toast.message"></span>
   <!-- !! is load-bearing: Alpine auto-calls an x-show expression that
@@ -252,9 +449,16 @@
     x-cloak
     @keydown.escape.window="close()"
     @click.self="close()"
-    class="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/40 dark:bg-black/60"
+    x-transition.opacity.duration.150ms
+    class="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/40 dark:bg-black/60 backdrop-blur-sm"
   >
-    <div class="w-full max-w-md mx-4 rounded-lg bg-white dark:bg-stone-800 shadow-2xl border border-stone-200 dark:border-stone-700 overflow-hidden">
+    <div
+      x-show="open"
+      x-transition:enter="transition ease-out duration-200"
+      x-transition:enter-start="opacity-0 scale-95 translate-y-2"
+      x-transition:enter-end="opacity-100 scale-100 translate-y-0"
+      class="w-full max-w-md mx-4 rounded-lg bg-white/95 dark:bg-stone-800/95 backdrop-blur-md shadow-2xl border border-stone-200 dark:border-stone-700 overflow-hidden"
+    >
       <input
         x-ref="paletteInput"
         x-model="query"
