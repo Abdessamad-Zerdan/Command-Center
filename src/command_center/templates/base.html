@@ -117,6 +117,58 @@
     };
   }
 
+  // Shared by every task card's "⋯" actions menu (item_card.html). The
+  // menu panel is x-teleport'd to <body> — cards in the main lane grid
+  // are height-capped with a scrolling overflow (see item_card.html's
+  // own height-cap class), and an absolutely-positioned dropdown living
+  // *inside* that card would get silently clipped by its own
+  // scrollbar. Teleporting it out and positioning it with `fixed`
+  // coordinates computed from the trigger's own bounding rect sidesteps
+  // that entirely. Alpine still binds the teleported markup to this
+  // same component scope (including the parent card's `removed` and
+  // `$store.counts`), so the fetch handlers work exactly as if the
+  // panel had never moved.
+  function cardMenu() {
+    return {
+      open: false,
+      top: 0,
+      left: 0,
+      // Each card's trigger has its own @click.stop (so opening a menu
+      // doesn't also fire the card's own "open item detail" click
+      // handler) — but .stop also means the click never bubbles up to
+      // document, so a *different* card's already-open panel would
+      // never see it as an "outside" click and would just stay open
+      // forever alongside the new one. window.__openCardMenu tracks
+      // whichever instance is currently open so toggle() can close it
+      // explicitly before opening a new one.
+      close() {
+        this.open = false;
+        if (window.__openCardMenu === this) window.__openCardMenu = null;
+      },
+      toggle() {
+        if (this.open) {
+          this.close();
+          return;
+        }
+        if (window.__openCardMenu) window.__openCardMenu.close();
+        const rect = this.$refs.trigger.getBoundingClientRect();
+        this.open = true;
+        window.__openCardMenu = this;
+        this.$nextTick(() => {
+          const panelRect = this.$refs.panel.getBoundingClientRect();
+          let top = rect.bottom + 4;
+          if (top + panelRect.height > window.innerHeight - 8) {
+            top = rect.top - panelRect.height - 4;
+          }
+          let left = rect.right - panelRect.width;
+          left = Math.max(8, Math.min(left, window.innerWidth - panelRect.width - 8));
+          this.top = top;
+          this.left = left;
+        });
+      },
+    };
+  }
+
   // Scroll reveal: any element with [data-reveal] rises + fades in the
   // first time it enters the viewport. No Alpine plugin required (only
   // core alpinejs is loaded) — plain IntersectionObserver instead.
