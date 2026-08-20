@@ -20,7 +20,9 @@
   {% endif %}
   @click='$dispatch("item-modal-open", {{ item | tojson }})'
   :class="dragOverCard ? 'ring-2 ring-rust dark:ring-rust-light' : ''"
-  class="mb-2 {{ '' if full_height else 'max-h-[180px] overflow-y-auto' }} rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-3 py-3 cursor-pointer hover:border-stone-300 dark:hover:border-stone-600 {% if not is_history %}active:cursor-grabbing{% endif %} {% if item.priority == 1 %}border-l-2 border-l-rust dark:border-l-rust-light{% endif %}"
+  data-reveal
+  data-reveal-delay="{{ (item.id % 6) + 1 }}"
+  class="card-lift mb-2 {{ '' if full_height else 'max-h-[180px] overflow-y-auto' }} rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-3 py-3 cursor-pointer hover:border-stone-300 dark:hover:border-stone-600 {% if not is_history %}active:cursor-grabbing{% endif %} {% if item.priority == 1 %}border-l-2 border-l-rust dark:border-l-rust-light{% endif %}"
 >
   <div class="flex items-start justify-between gap-2">
     <h3 class="min-w-0 flex-1 break-words font-serif text-base text-stone-900 dark:text-stone-100 leading-snug">{{ item.title }}</h3>
