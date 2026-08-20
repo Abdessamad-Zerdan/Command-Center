@@ -500,6 +500,7 @@
             const container = document.getElementById('lanes-container');
             if (container) container.outerHTML = data.html;
             Object.assign(Alpine.store('counts'), data.lane_counts);
+            window.observeReveals();
           })
           .catch(() => {});
       },

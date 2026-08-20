@@ -120,19 +120,31 @@
   // Scroll reveal: any element with [data-reveal] rises + fades in the
   // first time it enters the viewport. No Alpine plugin required (only
   // core alpinejs is loaded) — plain IntersectionObserver instead.
-  document.addEventListener('DOMContentLoaded', () => {
-    const revealEls = document.querySelectorAll('[data-reveal]');
+  //
+  // window.observeReveals is exposed so any code that swaps in new
+  // server-rendered HTML after load (e.g. the assistant widget's
+  // refreshLanes(), which replaces #lanes-container's outerHTML) can
+  // re-run this — otherwise the freshly inserted [data-reveal]
+  // elements would sit at their initial opacity:0 forever, since the
+  // one-time DOMContentLoaded observer never saw them.
+  function observeReveals(root) {
+    root = root || document;
+    const revealEls = root.querySelectorAll('[data-reveal]:not(.is-visible)');
     if (!revealEls.length) return;
-    const io = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('is-visible');
-          io.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
-    revealEls.forEach((el) => io.observe(el));
-  });
+    if (!window.__revealObserver) {
+      window.__revealObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            window.__revealObserver.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+    }
+    revealEls.forEach((el) => window.__revealObserver.observe(el));
+  }
+  window.observeReveals = observeReveals;
+  document.addEventListener('DOMContentLoaded', () => observeReveals());
 </script>
 <style>
   ::-webkit-scrollbar { height: 8px; width: 8px; }
