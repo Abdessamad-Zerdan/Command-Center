@@ -9,12 +9,15 @@ never computed or suggested by this code. All status chips are additive
 and neutral — see fitness/aggregations.py's own docstring.
 """
 
+import csv
+import io
 import sqlite3
 from datetime import date as date_type
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
@@ -36,6 +39,88 @@ CHART_WEEKS = 8
 
 def _today() -> date_type:
     return datetime.now(TZ).date()
+
+
+def _month_bounds(today: date_type) -> tuple[str, str]:
+    """[start, end) half-open ISO strings for today's own calendar
+    month — the current month is what "this month's data" means with
+    no month picker on the page (yet) to say otherwise."""
+    start = today.replace(day=1)
+    end = date_type(start.year + 1, 1, 1) if start.month == 12 else date_type(start.year, start.month + 1, 1)
+    return start.isoformat(), end.isoformat()
+
+
+def _rows_to_csv(rows: list[dict]) -> str:
+    """Empty table -> empty string (no header row), same as
+    app.py's own _rows_to_csv — an empty CSV download is a legitimate,
+    unsurprising result for "nothing logged this month yet.\""""
+    if not rows:
+        return ""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+@router.get("/fitness/export/daily-log.csv")
+def export_daily_log_csv():
+    start, end = _month_bounds(_today())
+    rows = [
+        {
+            "log_date": log["log_date"],
+            "bodyweight_kg": log["bodyweight_kg"],
+            "protein_g": log["protein_g"],
+            "addons_checked": ", ".join(log["addons_checked"]),
+            "note": log["note"],
+        }
+        for log in queries.list_daily_logs(start, end)
+    ]
+    return Response(
+        content=_rows_to_csv(rows),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=fitness-daily-log-{start[:7]}.csv"},
+    )
+
+
+@router.get("/fitness/export/training.csv")
+def export_training_csv():
+    """One row per exercise (not per session) — a session's own volume
+    is just sum(sets * reps * weight_kg) across its rows, so nothing is
+    lost by flattening, and a flat sheet is what's actually usable in a
+    spreadsheet."""
+    start, end = _month_bounds(_today())
+    rows = [
+        {
+            "session_date": s["session_date"],
+            "exercise": ex["name"],
+            "sets": ex["sets"],
+            "reps": ex["reps"],
+            "weight_kg": ex["weight_kg"],
+            "volume_kg": ex["sets"] * ex["reps"] * ex["weight_kg"],
+        }
+        for s in queries.list_training_sessions(start, end)
+        for ex in s["exercises"]
+    ]
+    return Response(
+        content=_rows_to_csv(rows),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=fitness-training-{start[:7]}.csv"},
+    )
+
+
+@router.get("/fitness/export/running.csv")
+def export_running_csv():
+    start, end = _month_bounds(_today())
+    rows = [
+        {"run_date": r["run_date"], "distance_km": r["distance_km"], "intensity": r["intensity"]}
+        for r in queries.list_running_logs(start, end)
+    ]
+    return Response(
+        content=_rows_to_csv(rows),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=fitness-running-{start[:7]}.csv"},
+    )
 
 
 @router.get("/fitness")

@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from command_center import auth, db, queries
 from command_center.assistant import ingest
+from command_center.config import TZ
 from command_center.fitness import aggregations, charts
 from command_center.setup_wizard import status as setup_status
 
@@ -198,10 +199,6 @@ def test_list_daily_logs_respects_half_open_bounds(client: TestClient) -> None:
 def test_save_daily_log_route_persists_and_syncs_current_weight_only_for_today(
     client: TestClient,
 ) -> None:
-    from datetime import datetime
-
-    from command_center.config import TZ
-
     today_iso = datetime.now(TZ).date().isoformat()
 
     response = client.post(
@@ -440,3 +437,72 @@ def test_bars_svg_draws_a_cap_line_only_when_given(client: TestClient) -> None:
     assert "stroke-dasharray" in with_cap
     assert "stroke-dasharray" not in without_cap
     assert with_cap.count("<rect") >= 2
+
+
+# --- monthly CSV exports -------------------------------------------------------
+
+
+def test_dashboard_shows_the_three_download_links(client: TestClient) -> None:
+    response = client.get("/fitness")
+    assert 'href="/fitness/export/daily-log.csv"' in response.text
+    assert 'href="/fitness/export/training.csv"' in response.text
+    assert 'href="/fitness/export/running.csv"' in response.text
+
+
+def test_export_daily_log_csv_includes_this_months_entry(client: TestClient) -> None:
+    today_iso = datetime.now(TZ).date().isoformat()
+    queries.upsert_daily_log(today_iso, 54.2, 105, ["Olive oil"], "note here")
+
+    response = client.get("/fitness/export/daily-log.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["content-disposition"] == f"attachment; filename=fitness-daily-log-{today_iso[:7]}.csv"
+    assert response.text.startswith("log_date,")
+    assert "Olive oil" in response.text
+    assert "note here" in response.text
+
+
+def test_export_daily_log_csv_excludes_a_different_month(client: TestClient) -> None:
+    queries.upsert_daily_log("2020-01-15", 50, 90, [], "old entry")
+    response = client.get("/fitness/export/daily-log.csv")
+    assert "old entry" not in response.text
+
+
+def test_export_training_csv_is_one_row_per_exercise(client: TestClient) -> None:
+    today_iso = datetime.now(TZ).date().isoformat()
+    queries.create_training_session(
+        today_iso,
+        [
+            {"name": "Squat", "sets": 3, "reps": 5, "weight_kg": 60},
+            {"name": "Bench", "sets": 3, "reps": 8, "weight_kg": 40},
+        ],
+    )
+
+    response = client.get("/fitness/export/training.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == f"attachment; filename=fitness-training-{today_iso[:7]}.csv"
+    lines = [line for line in response.text.strip().splitlines() if line]
+    assert len(lines) == 3  # header + 2 exercise rows
+    assert "Squat" in response.text and "Bench" in response.text
+    assert "900" in response.text  # 3 * 5 * 60 volume_kg
+
+
+def test_export_running_csv(client: TestClient) -> None:
+    today_iso = datetime.now(TZ).date().isoformat()
+    queries.create_running_log(today_iso, 6.5, "easy")
+
+    response = client.get("/fitness/export/running.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == f"attachment; filename=fitness-running-{today_iso[:7]}.csv"
+    assert "6.5" in response.text
+    assert "easy" in response.text
+
+
+def test_all_three_exports_are_empty_strings_not_errors_with_no_data(client: TestClient) -> None:
+    for path in ("/fitness/export/daily-log.csv", "/fitness/export/training.csv", "/fitness/export/running.csv"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.text == ""
