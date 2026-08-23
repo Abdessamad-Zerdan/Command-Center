@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Fitness Settings{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Fitness Settings</h1>
+    <a href="/fitness" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to fitness</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div class="max-w-2xl space-y-4">
+
+    <p class="text-xs text-stone-500 dark:text-stone-400 -mb-1">
+      Every number below is yours to set — this page never suggests a target on its own, only mirrors what you enter here.
+    </p>
+
+    <div
+      x-data="{
+        goal_weight_low: {{ settings.goal_weight_low }},
+        goal_weight_high: {{ settings.goal_weight_high }},
+        height_cm: {{ settings.height_cm }},
+        age: {{ settings.age }},
+        current_weight: {{ settings.current_weight }},
+        protein_target_g_per_day: {{ settings.protein_target_g_per_day }},
+        resistance_sessions_per_week_target: {{ settings.resistance_sessions_per_week_target }},
+        running_sessions_per_week_cap: {{ settings.running_sessions_per_week_cap }},
+        running_weekly_distance_cap_km: {{ settings.running_weekly_distance_cap_km if settings.running_weekly_distance_cap_km is not none else "''" }},
+        saving: false,
+        saved: false,
+        error: '',
+        save() {
+          this.error = ''; this.saving = true; this.saved = false;
+          fetch('/fitness/settings', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              goal_weight_low: Number(this.goal_weight_low),
+              goal_weight_high: Number(this.goal_weight_high),
+              height_cm: Number(this.height_cm),
+              age: Number(this.age),
+              current_weight: Number(this.current_weight),
+              protein_target_g_per_day: Number(this.protein_target_g_per_day),
+              resistance_sessions_per_week_target: Number(this.resistance_sessions_per_week_target),
+              running_sessions_per_week_cap: Number(this.running_sessions_per_week_cap),
+              running_weekly_distance_cap_km: this.running_weekly_distance_cap_km === '' ? null : Number(this.running_weekly_distance_cap_km),
+            }),
+          }).then(async r => {
+            this.saving = false;
+            if (r.ok) { this.saved = true; setTimeout(() => { this.saved = false; }, 2000); return; }
+            const data = await r.json().catch(() => ({}));
+            this.error = data.detail || 'Could not save — try again.';
+          });
+        },
+      }"
+      class="card-lift rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4"
+    >
+      <div class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-3">Targets</div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-[11px] text-stone-500 dark:text-stone-400 mb-0.5">Goal weight low (kg)</label>
+          <input type="number" step="0.1" x-model="goal_weight_low" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+        <div>
+          <label class="block text-[11px] text-stone-500 dark:text-stone-400 mb-0.5">Goal weight high (kg)</label>
+          <input type="number" step="0.1" x-model="goal_weight_high" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+        <div>
+          <label class="block text-[11px] text-stone-500 dark:text-stone-400 mb-0.5">Height (cm)</label>
+          <input type="number" step="0.1" x-model="height_cm" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+        <div>
+          <label class="block text-[11px] text-stone-500 dark:text-stone-400 mb-0.5">Age</label>
+          <input type="number" step="1" x-model="age" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+        <div>
+          <label class="block text-[11px] text-stone-500 dark:text-stone-400 mb-0.5">Current weight (kg)</label>
+          <input type="number" step="0.1" x-model="current_weight" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+        <div>
+          <label class="block text-[11px] text-stone-500 dark:text-stone-400 mb-0.5">Protein target (g/day)</label>
+          <input type="number" step="1" x-model="protein_target_g_per_day" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+        <div>
+          <label class="block text-[11px] text-stone-500 dark:text-stone-400 mb-0.5">Resistance sessions / week target</label>
+          <input type="number" step="1" min="0" x-model="resistance_sessions_per_week_target" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+        <div>
+          <label class="block text-[11px] text-stone-500 dark:text-stone-400 mb-0.5">Running sessions / week cap</label>
+          <input type="number" step="1" min="0" x-model="running_sessions_per_week_cap" class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+        <div class="col-span-2">
+          <label class="block text-[11px] text-stone-500 dark:text-stone-400 mb-0.5">Running weekly distance cap (km) — leave blank if you don't want one</label>
+          <input type="number" step="0.1" min="0" x-model="running_weekly_distance_cap_km" placeholder="No cap"
+            class="w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+      </div>
+      <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-2"></p>
+      <div class="mt-3 flex items-center gap-2">
+        <button type="button" :disabled="saving" @click="save()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">
+          <span x-show="!saving">Save targets</span>
+          <span x-show="saving">Saving&hellip;</span>
+        </button>
+        <span x-show="saved" class="text-xs text-emerald-600 dark:text-emerald-400">Saved.</span>
+      </div>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4">
+      <div class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-1">Surplus add-ons</div>
+      <p class="text-xs text-stone-500 dark:text-stone-400 mb-3">Calorie-dense staples you can tick off on the daily log — add or remove any of your own.</p>
+
+      {% if not addons %}
+      <p class="text-xs text-stone-400 dark:text-stone-500 italic mb-3">No add-ons yet — add one below.</p>
+      {% endif %}
+
+      <div class="space-y-1.5 mb-3">
+        {% for addon in addons %}
+        <div x-data="{ removed: false, error: '' }" x-show="!removed" x-transition class="flex items-center justify-between gap-2 rounded border border-stone-200 dark:border-stone-700 px-2.5 py-1.5">
+          <span class="text-sm text-stone-700 dark:text-stone-300">{{ addon.name }}</span>
+          <div class="flex items-center gap-2">
+            <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400"></p>
+            <button
+              type="button"
+              @click="fetch('/fitness/settings/addons/{{ addon.id }}', { method: 'DELETE' }).then(r => { if (r.ok) { removed = true; } else { error = 'Could not remove — try again.'; } })"
+              class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-rust dark:hover:text-rust-light hover:border-rust dark:hover:border-rust-light whitespace-nowrap"
+            >Remove</button>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div
+        x-data="{
+          name: '', error: '',
+          submit() {
+            this.error = '';
+            const name = this.name.trim();
+            if (!name) return;
+            fetch('/fitness/settings/addons', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name }),
+            }).then(async r => {
+              if (r.ok) { window.location.reload(); return; }
+              const data = await r.json().catch(() => ({}));
+              this.error = data.detail || 'Could not add that.';
+            });
+          }
+        }"
+        class="flex flex-wrap items-center gap-2"
+      >
+        <input type="text" x-model="name" @keydown.enter="submit()" placeholder="e.g. Whole milk" maxlength="60"
+          class="flex-1 min-w-[10rem] text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <button type="button" @click="submit()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Add
+        </button>
+        <p x-show="error" x-text="error" class="w-full text-xs text-red-600 dark:text-red-400"></p>
+      </div>
+    </div>
+
+  </div>
+
+  <footer class="mt-8 text-center text-[11px] text-stone-400 dark:text-stone-500">
+    Personal tracking tool, not medical or nutritional advice.
+  </footer>
+</main>
+{% endblock %}
