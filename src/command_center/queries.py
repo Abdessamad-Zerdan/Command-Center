@@ -1355,3 +1355,325 @@ def delete_knowledge_document(doc_id: int) -> bool:
     with session() as conn:
         cursor = conn.execute("DELETE FROM knowledge_documents WHERE id = ?", (doc_id,))
         return cursor.rowcount > 0
+
+
+# --- /fitness -----------------------------------------------------------
+
+_DEFAULT_FITNESS_SETTINGS = {
+    "goal_weight_low": 60.0,
+    "goal_weight_high": 65.0,
+    "height_cm": 178.0,
+    "age": 24,
+    "current_weight": 53.7,
+    "protein_target_g_per_day": 100.0,
+    "resistance_sessions_per_week_target": 3,
+    "running_sessions_per_week_cap": 2,
+    "running_weekly_distance_cap_km": None,
+}
+_DEFAULT_FITNESS_SURPLUS_ADDONS = ("Olive oil", "Peanut butter")
+
+
+def seed_fitness_settings() -> None:
+    """Seeds the single settings row + starter surplus add-ons on first
+    run. INSERT OR IGNORE, same idiom as seed_app_settings — an existing
+    row (or addon) is left untouched, so this is safe to call on every
+    startup."""
+    with session() as conn:
+        d = _DEFAULT_FITNESS_SETTINGS
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO fitness_settings
+                (id, goal_weight_low, goal_weight_high, height_cm, age, current_weight,
+                 protein_target_g_per_day, resistance_sessions_per_week_target,
+                 running_sessions_per_week_cap, running_weekly_distance_cap_km)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                d["goal_weight_low"],
+                d["goal_weight_high"],
+                d["height_cm"],
+                d["age"],
+                d["current_weight"],
+                d["protein_target_g_per_day"],
+                d["resistance_sessions_per_week_target"],
+                d["running_sessions_per_week_cap"],
+                d["running_weekly_distance_cap_km"],
+            ),
+        )
+        now = datetime.now(TZ).isoformat()
+        for name in _DEFAULT_FITNESS_SURPLUS_ADDONS:
+            conn.execute(
+                "INSERT OR IGNORE INTO fitness_surplus_addons (name, created_at) VALUES (?, ?)",
+                (name, now),
+            )
+
+
+def get_fitness_settings() -> dict[str, Any]:
+    """Always returns a value — seed_fitness_settings() runs at every
+    startup, same guarantee get_day_bounds() relies on for app_settings."""
+    with session() as conn:
+        row = conn.execute("SELECT * FROM fitness_settings WHERE id = 1").fetchone()
+        return dict(row)
+
+
+def update_fitness_settings(
+    goal_weight_low: float,
+    goal_weight_high: float,
+    height_cm: float,
+    age: int,
+    current_weight: float,
+    protein_target_g_per_day: float,
+    resistance_sessions_per_week_target: int,
+    running_sessions_per_week_cap: int,
+    running_weekly_distance_cap_km: float | None,
+) -> None:
+    """Full replace of every field — the Settings page always submits
+    the whole form at once, so there's no partial-update case to
+    support (and no ambiguity around running_weekly_distance_cap_km,
+    the one field that's meant to be nullable: the caller always passes
+    it explicitly, blank or not)."""
+    with session() as conn:
+        conn.execute(
+            """
+            UPDATE fitness_settings SET
+                goal_weight_low = ?, goal_weight_high = ?, height_cm = ?, age = ?,
+                current_weight = ?, protein_target_g_per_day = ?,
+                resistance_sessions_per_week_target = ?, running_sessions_per_week_cap = ?,
+                running_weekly_distance_cap_km = ?
+            WHERE id = 1
+            """,
+            (
+                goal_weight_low,
+                goal_weight_high,
+                height_cm,
+                age,
+                current_weight,
+                protein_target_g_per_day,
+                resistance_sessions_per_week_target,
+                running_sessions_per_week_cap,
+                running_weekly_distance_cap_km,
+            ),
+        )
+
+
+def set_current_weight(weight_kg: float) -> None:
+    """Keeps fitness_settings.current_weight (the headline-stat figure)
+    in sync with same-day bodyweight entries logged via the daily log —
+    see fitness/router.py's save_daily_log for the "only when log_date
+    is today" guard that keeps a backfilled past date from clobbering
+    it with stale data."""
+    with session() as conn:
+        conn.execute("UPDATE fitness_settings SET current_weight = ? WHERE id = 1", (weight_kg,))
+
+
+def list_surplus_addons() -> list[dict[str, Any]]:
+    with session() as conn:
+        rows = conn.execute("SELECT * FROM fitness_surplus_addons ORDER BY name ASC").fetchall()
+        return [dict(row) for row in rows]
+
+
+def create_surplus_addon(name: str) -> int:
+    with session() as conn:
+        cursor = conn.execute(
+            "INSERT INTO fitness_surplus_addons (name, created_at) VALUES (?, ?)",
+            (name, datetime.now(TZ).isoformat()),
+        )
+        return cursor.lastrowid
+
+
+def delete_surplus_addon(addon_id: int) -> bool:
+    with session() as conn:
+        cursor = conn.execute("DELETE FROM fitness_surplus_addons WHERE id = ?", (addon_id,))
+        return cursor.rowcount > 0
+
+
+def upsert_daily_log(
+    log_date: str,
+    bodyweight_kg: float | None,
+    protein_g: float | None,
+    addons_checked: list[str],
+    note: str,
+) -> int:
+    """One row per log_date (UNIQUE) — re-saving the same day's form
+    updates the existing row instead of creating a second one. The form
+    always represents that day's full current state, so this is a full
+    replace on conflict, not a merge."""
+    now = datetime.now(TZ).isoformat()
+    addons_json = json.dumps(addons_checked)
+    with session() as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_log (log_date, bodyweight_kg, protein_g, addons_checked_json, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(log_date) DO UPDATE SET
+                bodyweight_kg = excluded.bodyweight_kg,
+                protein_g = excluded.protein_g,
+                addons_checked_json = excluded.addons_checked_json,
+                note = excluded.note
+            """,
+            (log_date, bodyweight_kg, protein_g, addons_json, note, now),
+        )
+        row = conn.execute("SELECT id FROM daily_log WHERE log_date = ?", (log_date,)).fetchone()
+        return row["id"]
+
+
+def get_daily_log(log_date: str) -> dict[str, Any] | None:
+    with session() as conn:
+        row = conn.execute("SELECT * FROM daily_log WHERE log_date = ?", (log_date,)).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["addons_checked"] = json.loads(out["addons_checked_json"])
+        return out
+
+
+def list_daily_logs(start: str, end: str) -> list[dict[str, Any]]:
+    """log_date in [start, end), half-open — same convention as
+    list_finance_entries. Ascending by date (chart-friendly order)."""
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM daily_log WHERE log_date >= ? AND log_date < ? ORDER BY log_date ASC",
+            (start, end),
+        ).fetchall()
+        out = []
+        for row in rows:
+            d = dict(row)
+            d["addons_checked"] = json.loads(d["addons_checked_json"])
+            out.append(d)
+        return out
+
+
+def list_bodyweight_log() -> list[dict[str, Any]]:
+    """Every daily_log row with a logged bodyweight, oldest first — the
+    weight-trend chart's data source. All-time and unwindowed on
+    purpose: the point of that chart is the whole trend toward the goal
+    band, not a recent slice."""
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT log_date, bodyweight_kg FROM daily_log "
+            "WHERE bodyweight_kg IS NOT NULL ORDER BY log_date ASC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def create_training_session(session_date: str, exercises: list[dict[str, Any]]) -> int:
+    """exercises: [{'name', 'sets', 'reps', 'weight_kg'}, ...] in display
+    order — sort_order preserves that, since SQLite doesn't guarantee
+    row order without an ORDER BY."""
+    now = datetime.now(TZ).isoformat()
+    with session() as conn:
+        cursor = conn.execute(
+            "INSERT INTO training_session (session_date, created_at) VALUES (?, ?)",
+            (session_date, now),
+        )
+        session_id = cursor.lastrowid
+        for i, ex in enumerate(exercises):
+            conn.execute(
+                "INSERT INTO training_exercise (session_id, name, sets, reps, weight_kg, sort_order) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, ex["name"], ex["sets"], ex["reps"], ex["weight_kg"], i),
+            )
+        return session_id
+
+
+def list_training_sessions(start: str, end: str) -> list[dict[str, Any]]:
+    """session_date in [start, end), half-open. Each session dict gets a
+    nested 'exercises' list and a computed 'volume' (sum of sets * reps
+    * weight_kg across its exercises) — never stored, always derived
+    from the exercise rows, same reasoning as items.time_logged_display."""
+    with session() as conn:
+        sessions = conn.execute(
+            "SELECT * FROM training_session WHERE session_date >= ? AND session_date < ? "
+            "ORDER BY session_date DESC, id DESC",
+            (start, end),
+        ).fetchall()
+        out = []
+        for s in sessions:
+            exercise_rows = conn.execute(
+                "SELECT * FROM training_exercise WHERE session_id = ? ORDER BY sort_order ASC, id ASC",
+                (s["id"],),
+            ).fetchall()
+            exercises = [dict(e) for e in exercise_rows]
+            volume = sum(e["sets"] * e["reps"] * e["weight_kg"] for e in exercises)
+            d = dict(s)
+            d["exercises"] = exercises
+            d["volume"] = volume
+            out.append(d)
+        return out
+
+
+def delete_training_session(session_id: int) -> bool:
+    with session() as conn:
+        conn.execute("DELETE FROM training_exercise WHERE session_id = ?", (session_id,))
+        cursor = conn.execute("DELETE FROM training_session WHERE id = ?", (session_id,))
+        return cursor.rowcount > 0
+
+
+def total_training_volume(start: str, end: str) -> float:
+    """Sum of sets * reps * weight_kg across every exercise in sessions
+    whose session_date falls in [start, end) — the number both the
+    7-day window comparison and the weekly bar chart are built from."""
+    with session() as conn:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(te.sets * te.reps * te.weight_kg), 0) AS total
+            FROM training_exercise te
+            JOIN training_session ts ON ts.id = te.session_id
+            WHERE ts.session_date >= ? AND ts.session_date < ?
+            """,
+            (start, end),
+        ).fetchone()
+        return row["total"]
+
+
+def count_training_sessions(start: str, end: str) -> int:
+    with session() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM training_session WHERE session_date >= ? AND session_date < ?",
+            (start, end),
+        ).fetchone()
+        return row["n"]
+
+
+def create_running_log(run_date: str, distance_km: float, intensity: str) -> int:
+    with session() as conn:
+        cursor = conn.execute(
+            "INSERT INTO running_log (run_date, distance_km, intensity, created_at) VALUES (?, ?, ?, ?)",
+            (run_date, distance_km, intensity, datetime.now(TZ).isoformat()),
+        )
+        return cursor.lastrowid
+
+
+def list_running_logs(start: str, end: str) -> list[dict[str, Any]]:
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM running_log WHERE run_date >= ? AND run_date < ? "
+            "ORDER BY run_date DESC, id DESC",
+            (start, end),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def delete_running_log(run_id: int) -> bool:
+    with session() as conn:
+        cursor = conn.execute("DELETE FROM running_log WHERE id = ?", (run_id,))
+        return cursor.rowcount > 0
+
+
+def total_running_distance(start: str, end: str) -> float:
+    with session() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(distance_km), 0) AS total FROM running_log "
+            "WHERE run_date >= ? AND run_date < ?",
+            (start, end),
+        ).fetchone()
+        return row["total"]
+
+
+def count_running_logs(start: str, end: str) -> int:
+    with session() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM running_log WHERE run_date >= ? AND run_date < ?",
+            (start, end),
+        ).fetchone()
+        return row["n"]

@@ -212,6 +212,82 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     char_count INTEGER NOT NULL,
     uploaded_at TEXT NOT NULL
 );
+
+-- /fitness — a hidden (unlinked, direct-URL-only) personal training +
+-- nutrition tracker. A pure mirror of hand-entered data: it never
+-- computes or suggests a target itself, only compares logged numbers
+-- against whatever this table holds.
+CREATE TABLE IF NOT EXISTS fitness_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    goal_weight_low REAL NOT NULL,
+    goal_weight_high REAL NOT NULL,
+    height_cm REAL NOT NULL,
+    age INTEGER NOT NULL,
+    current_weight REAL NOT NULL,
+    protein_target_g_per_day REAL NOT NULL,
+    resistance_sessions_per_week_target INTEGER NOT NULL,
+    running_sessions_per_week_cap INTEGER NOT NULL,
+    running_weekly_distance_cap_km REAL
+);
+
+-- User-defined checklist of calorie-dense staples (e.g. "olive oil") —
+-- add/remove freely from Settings. daily_log stores which of these were
+-- checked on a given day by *name* (see daily_log.addons_checked_json),
+-- a deliberate soft reference: deleting an addon here must never alter
+-- what an already-saved day shows it logged.
+CREATE TABLE IF NOT EXISTS fitness_surplus_addons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+-- One row per calendar day (log_date is UNIQUE) — re-saving the same
+-- day's form is an upsert, not a new entry, since this is meant to be a
+-- 20-second daily habit: open today, fill in whatever you have, save.
+CREATE TABLE IF NOT EXISTS daily_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    log_date TEXT NOT NULL UNIQUE,
+    bodyweight_kg REAL,
+    protein_g REAL,
+    addons_checked_json TEXT NOT NULL DEFAULT '[]',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_log_date ON daily_log (log_date);
+
+CREATE TABLE IF NOT EXISTS training_session (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_date TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_training_session_date ON training_session (session_date);
+
+-- Volume (sets * reps * weight_kg) is computed at read time, never
+-- stored — same reasoning as items.time_logged_display: one source of
+-- truth, no risk of a stored total drifting from its inputs.
+CREATE TABLE IF NOT EXISTS training_exercise (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES training_session(id),
+    name TEXT NOT NULL,
+    sets INTEGER NOT NULL,
+    reps INTEGER NOT NULL,
+    weight_kg REAL NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_training_exercise_session ON training_exercise (session_id);
+
+CREATE TABLE IF NOT EXISTS running_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date TEXT NOT NULL,
+    distance_km REAL NOT NULL,
+    intensity TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_running_log_date ON running_log (run_date);
 """
 
 
