@@ -637,6 +637,32 @@ def update_item_lane(item_id: int, lane: str) -> bool:
         return updated
 
 
+def set_item_due_date(item_id: int, due_date: str | None) -> bool:
+    """Drag-and-drop on /calendar's month grid — moves an item to a
+    different due date (or clears it, due_date=None) without touching
+    lane/brief_date/status, unlike move_item_to_date (which is for
+    bringing a whole history-day item back into today's active brief).
+    Returns True if a row was updated."""
+    with session() as conn:
+        cursor = conn.execute("UPDATE items SET due_date = ? WHERE id = ?", (due_date, item_id))
+        return cursor.rowcount > 0
+
+
+def list_pending_items_by_due_date(start: str, end: str) -> list[dict[str, Any]]:
+    """Pending items with due_date in [start, end) — /calendar's task
+    layer. Scoped by due_date alone, not lane or brief_date: due_date is
+    a standalone field any pending item can carry regardless of which
+    day it was triaged into, and "what's coming" should surface every
+    one of them."""
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM items WHERE status = 'pending' AND due_date >= ? AND due_date < ? "
+            "ORDER BY due_date ASC, priority ASC, id ASC",
+            (start, end),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def list_triage_corrections(limit: int = 20) -> list[dict[str, Any]]:
     with session() as conn:
         rows = conn.execute(

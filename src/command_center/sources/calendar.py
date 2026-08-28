@@ -1,7 +1,7 @@
 """Calendar ingestion: today's events + tomorrow's first 3."""
 
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -118,6 +118,42 @@ class CalendarSource:
     def fetch(self) -> list[RawItem]:
         raw_items, _ = self.fetch_with_events()
         return raw_items
+
+    def fetch_month_events(self, start: date, end: date) -> list[dict]:
+        """Plain event dicts (not RawItems — no triage involved) for
+        [start, end) — /calendar's month-grid view. Distinct from
+        fetch_with_events(), which is today+tomorrow-only and feeds
+        triage; this is a much wider read-only window with no
+        side effects and nothing persisted."""
+        time_min = datetime.combine(start, datetime.min.time(), tzinfo=TZ).isoformat()
+        time_max = datetime.combine(end, datetime.min.time(), tzinfo=TZ).isoformat()
+        resp = (
+            self._service.events()
+            .list(
+                calendarId="primary",
+                timeMin=time_min,
+                timeMax=time_max,
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+        )
+        out = []
+        for ev in resp.get("items", []):
+            start_field = ev.get("start", {})
+            start_str = start_field.get("dateTime") or start_field.get("date")
+            start_dt = _parse_event_time(start_str) if start_str else None
+            if start_dt is None:
+                continue
+            out.append(
+                {
+                    "title": ev.get("summary", "(no title)"),
+                    "date": start_dt.date().isoformat(),
+                    "time": start_dt.strftime("%H:%M") if start_field.get("dateTime") else None,
+                    "link": ev.get("htmlLink", ""),
+                }
+            )
+        return out
 
     def create_event(
         self, title: str, start: dict, end: dict, description: str = ""

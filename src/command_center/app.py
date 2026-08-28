@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -12,13 +12,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from googleapiclient.errors import HttpError
 from pydantic import BaseModel
 
-from command_center import auth, fixtures, notify, nudges, pipeline, queries, setup_wizard, triage_rules
-from command_center.sources.calendar import CalendarSource
+from command_center import auth, calendar_sync, fixtures, notify, nudges, pipeline, queries, setup_wizard, triage_rules
 from command_center.assistant import ingest as assistant_ingest
 from command_center.assistant.router import router as assistant_router
+from command_center.calendar_view.router import router as calendar_router
 from command_center.finances.router import router as finances_router
 from command_center.fitness.router import router as fitness_router
 from command_center.history.router import router as history_router
@@ -139,6 +138,7 @@ app = FastAPI(title="Daily Command Center", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 setup_wizard.register(app)  # remove this line (+ the setup_wizard package) to remove the wizard
 app.include_router(assistant_router)
+app.include_router(calendar_router)
 app.include_router(finances_router)
 app.include_router(fitness_router)
 app.include_router(history_router)  # before any @app.get("/history/{brief_date}") is registered below
@@ -536,6 +536,27 @@ def update_item_lane(item_id: int, payload: ItemLaneIn):
     return {"ok": True}
 
 
+class ItemDueDateIn(BaseModel):
+    due_date: str | None = None
+
+
+@app.patch("/items/{item_id}/due-date")
+def update_item_due_date(item_id: int, payload: ItemDueDateIn):
+    # /calendar's drag-and-drop and "Today" shortcut both land here —
+    # due_date alone, no lane/brief_date/status change (see
+    # queries.set_item_due_date's own docstring for why that's a
+    # different operation from move_item_to_date).
+    if payload.due_date is not None:
+        try:
+            date.fromisoformat(payload.due_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid date: {payload.due_date!r}") from exc
+    updated = queries.set_item_due_date(item_id, payload.due_date)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"ok": True}
+
+
 class ItemProjectIn(BaseModel):
     project_id: int | None = None
 
@@ -553,43 +574,8 @@ def add_item_to_calendar(item_id: int):
     item = queries.get_item_for_calendar(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Item not found")
-    if item["calendar_event_id"]:
-        # Already added — idempotent, just hand back the existing link
-        # rather than creating a duplicate event on a second click.
-        return {"ok": True, "link": item["calendar_link"]}
-    if item["source"] == "calendar":
-        raise HTTPException(status_code=400, detail="This item already is a calendar event")
-
-    if item["scheduled_start"] and item["scheduled_end"]:
-        start = {"dateTime": item["scheduled_start"], "timeZone": str(TZ)}
-        end = {"dateTime": item["scheduled_end"], "timeZone": str(TZ)}
-    elif item["due_date"]:
-        start = {"date": item["due_date"]}
-        end = {"date": (datetime.fromisoformat(item["due_date"]) + timedelta(days=1)).date().isoformat()}
-    else:
-        raise HTTPException(
-            status_code=400, detail="This item has no due date or scheduled time to add"
-        )
-
-    if not auth.has_valid_credentials():
-        raise HTTPException(status_code=400, detail="Google isn't connected")
-    try:
-        credentials = auth.get_google_credentials()
-        event = CalendarSource(credentials).create_event(item["title"], start, end)
-    except auth.AuthNotConfigured as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except HttpError as exc:
-        if exc.resp.status == 403:
-            raise HTTPException(
-                status_code=403,
-                detail="Google Calendar rejected this — your saved connection likely predates "
-                "write access. Reconnect Google (see SETUP.md) to grant it.",
-            ) from exc
-        raise HTTPException(status_code=502, detail=f"Google Calendar request failed: {exc}") from exc
-
-    link = event.get("htmlLink", "")
-    queries.set_item_calendar_event(item_id, event["id"], link)
-    return {"ok": True, "link": link}
+    result = calendar_sync.sync_item_to_calendar(item)
+    return {"ok": True, **result}
 
 
 class ItemReorderIn(BaseModel):
