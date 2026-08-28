@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Calendar{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Calendar</h1>
+    <a href="/brief" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to brief</a>
+  </div>
+</header>
+
+{% if not calendar_connected %}
+<div class="mx-4 sm:mx-6 mt-3 rounded-lg border border-rust/30 dark:border-rust-light/30 bg-stone-100 dark:bg-stone-800/50 px-3 py-2 text-xs text-rust dark:text-rust-light">
+  Showing tasks only — Google Calendar isn't connected, so events can't be shown here.
+  Connect it via the "Connect Google" steps in SETUP.md to see your events too.
+</div>
+{% elif calendar_degraded %}
+<div class="mx-4 sm:mx-6 mt-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+  Couldn't reach Google Calendar just now — showing tasks only for this view.
+</div>
+{% endif %}
+
+<main class="px-4 sm:px-6 py-6">
+  <div class="flex items-center justify-between mb-4">
+    <a href="/calendar?month={{ prev_month }}" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">&#8592; Previous month</a>
+    <div class="flex items-center gap-2">
+      <div class="text-sm font-serif text-stone-900 dark:text-stone-100">{{ month_label }}</div>
+      {% if current_month != today[:7] %}
+      <a href="/calendar" class="text-[11px] px-2 py-0.5 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500">Today</a>
+      {% endif %}
+    </div>
+    <a href="/calendar?month={{ next_month }}" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">Next month &#8594;</a>
+  </div>
+
+  <div class="grid grid-cols-7 gap-1.5 mb-1.5 text-center">
+    {% for label in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun") %}
+    <div class="text-[10px] uppercase tracking-wide text-stone-400 dark:text-stone-500">{{ label }}</div>
+    {% endfor %}
+  </div>
+
+  <div class="space-y-1.5" data-reveal>
+    {% for week in weeks %}
+    <div class="grid grid-cols-7 gap-1.5">
+      {% for cell in week %}
+      <div
+        x-data="{ dragOver: false }"
+        @dragover.prevent="dragOver = true"
+        @dragleave="dragOver = false"
+        @drop.prevent="
+          dragOver = false;
+          const itemId = $event.dataTransfer.getData('text/plain');
+          if (!itemId) return;
+          fetch(`/items/${itemId}/due-date`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ due_date: '{{ cell.date }}' }),
+          }).then(r => { if (r.ok) window.location.reload(); });
+        "
+        :class="dragOver ? 'ring-2 ring-rust dark:ring-rust-light bg-rust/5 dark:bg-rust-light/5' : ''"
+        class="card-lift min-h-[92px] sm:min-h-[110px] rounded-lg border {{ 'border-rust dark:border-rust-light' if cell.is_today else 'border-stone-200 dark:border-stone-700' }} bg-white dark:bg-stone-800 p-1.5 {{ '' if cell.in_month else 'opacity-40' }}"
+      >
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] {{ 'font-semibold text-rust dark:text-rust-light' if cell.is_today else 'text-stone-500 dark:text-stone-400' }}">{{ cell.day }}</span>
+        </div>
+        <div class="mt-1 space-y-1 max-h-[70px] sm:max-h-[88px] overflow-y-auto">
+          {% for ev in cell.events %}
+          <div class="rounded bg-stone-100 dark:bg-stone-700 px-1 py-0.5 text-[10px] text-stone-600 dark:text-stone-300 truncate" title="{{ ev.title }}">
+            {% if ev.time %}<span class="text-stone-400 dark:text-stone-500">{{ ev.time }}</span>{% endif %} {{ ev.title }}
+          </div>
+          {% endfor %}
+          {% for task in cell.tasks %}
+          <div
+            draggable="true"
+            @dragstart="$event.dataTransfer.setData('text/plain', '{{ task.id }}'); $event.dataTransfer.effectAllowed = 'move'"
+            class="group/task flex items-center gap-1 rounded border-l-2 {{ 'border-l-rust dark:border-l-rust-light' if task.priority == 1 else 'border-l-stone-300 dark:border-l-stone-600' }} bg-white dark:bg-stone-800 px-1 py-0.5 cursor-grab active:cursor-grabbing"
+            title="{{ task.title }}"
+          >
+            <span class="min-w-0 flex-1 truncate text-[10px] text-stone-700 dark:text-stone-300">{{ task.title }}</span>
+            {% if not cell.is_today %}
+            <button
+              type="button"
+              @click.stop="fetch('/items/{{ task.id }}/due-date', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ due_date: '{{ today }}' }) }).then(r => { if (r.ok) window.location.reload(); })"
+              title="Bring to today"
+              class="shrink-0 opacity-0 group-hover/task:opacity-100 text-stone-300 dark:text-stone-600 hover:text-rust dark:hover:text-rust-light text-[10px]"
+            >&#8594;today</button>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        <div class="mt-1" x-data="{ adding: false, title: '', lane: 'tasks_due', syncing: false, error: '', confirmation: '' }">
+          <button
+            type="button"
+            x-show="!adding"
+            @click="adding = true; $nextTick(() => $refs.newTaskInput && $refs.newTaskInput.focus())"
+            class="text-[10px] text-stone-300 dark:text-stone-600 hover:text-rust dark:hover:text-rust-light"
+          >+ task</button>
+          <div x-show="adding" class="space-y-0.5">
+            <input
+              type="text"
+              x-model="title"
+              x-ref="newTaskInput"
+              placeholder="Task title"
+              @keydown.enter="$refs.addBtn.click()"
+              @keydown.escape="adding = false; title = ''; error = ''"
+              class="w-full text-[10px] bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1 py-0.5 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+            >
+            <select x-model="lane" class="w-full text-[10px] bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1 py-0.5 text-stone-900 dark:text-stone-100">
+              {% for lane_key in lanes_order %}
+              <option value="{{ lane_key }}">{{ lane_labels[lane_key] }}</option>
+              {% endfor %}
+            </select>
+            <button
+              type="button"
+              x-ref="addBtn"
+              :disabled="syncing || !title.trim()"
+              @click="
+                syncing = true; error = ''; confirmation = '';
+                fetch('/calendar/tasks', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ lane: lane, title: title.trim(), due_date: '{{ cell.date }}' }),
+                }).then(async r => {
+                  syncing = false;
+                  const data = await r.json().catch(() => ({}));
+                  if (!r.ok) { error = data.detail || 'Could not add.'; return; }
+                  confirmation = data.calendar_synced ? 'Added + synced to Google.' : ('Added — Google sync failed: ' + (data.calendar_error || 'unknown error'));
+                  title = '';
+                  setTimeout(() => window.location.reload(), 1400);
+                })
+              "
+              class="w-full text-[10px] px-1 py-0.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50"
+            >
+              <span x-show="!syncing">Add + sync</span>
+              <span x-show="syncing">Saving&hellip;</span>
+            </button>
+            <p x-show="error" x-text="error" class="text-[9px] text-red-600 dark:text-red-400"></p>
+            <p x-show="confirmation" x-text="confirmation" class="text-[9px] text-emerald-600 dark:text-emerald-400"></p>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <p class="mt-4 text-[11px] text-stone-400 dark:text-stone-500">Drag a task onto another day to move its due date, or use the &#8594;today shortcut. "+ task" adds a new task straight to that day and syncs it to Google Calendar. Calendar events themselves aren't editable here.</p>
+</main>
+{% endblock %}

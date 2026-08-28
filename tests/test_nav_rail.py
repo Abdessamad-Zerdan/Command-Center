@@ -45,11 +45,12 @@ def test_nav_rail_trigger_present_once(client: TestClient) -> None:
     assert response.text.count('aria-label="Menu"') == 1
 
 
-def test_nav_rail_has_all_seven_items(client: TestClient) -> None:
+def test_nav_rail_has_all_eight_items(client: TestClient) -> None:
     response = client.get("/brief")
     assert response.status_code == 200
     for href in (
         "/brief",
+        "/calendar",
         "/projects",
         "/schedule",
         "/history",
@@ -58,7 +59,7 @@ def test_nav_rail_has_all_seven_items(client: TestClient) -> None:
         "/settings",
     ):
         assert f'href="{href}"' in response.text
-    for label in ("Brief", "Projects", "Schedule", "History", "Report", "Finances", "Settings"):
+    for label in ("Brief", "Calendar", "Projects", "Schedule", "History", "Report", "Finances", "Settings"):
         assert f">{label}</span>" in response.text
 
 
@@ -89,7 +90,7 @@ def test_rail_items_are_icon_only_with_a_per_item_hover_label(client: TestClient
     # A distinct class from the header's own icon-tooltip — per-item rail
     # labels are a different, always-on mechanism (see next test), not the
     # user-toggleable header tooltip feature.
-    assert response.text.count('class="nav-item-tooltip') == 7
+    assert response.text.count('class="nav-item-tooltip') == 8
 
 
 def test_rail_item_labels_are_not_gated_by_the_tooltip_settings_toggle(client: TestClient) -> None:
