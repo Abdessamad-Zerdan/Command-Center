@@ -279,3 +279,24 @@ def test_quick_added_task_appears_on_the_calendar_grid(client: TestClient) -> No
     )
     response = client.get("/calendar?month=2026-08")
     assert "Grid-visible task" in response.text
+
+
+# --- click-to-open task detail popup -------------------------------------------
+
+
+def test_task_chips_wire_up_click_to_open_the_modal(client: TestClient) -> None:
+    queries.create_manual_item("2026-08-01", "urgent", "Click me", due_date="2026-08-20")
+    response = client.get("/calendar?month=2026-08")
+    assert '@click=\'$dispatch("task-modal-open"' in response.text
+
+
+def test_calendar_page_defines_the_task_modal_component_and_listener(client: TestClient) -> None:
+    response = client.get("/calendar")
+    assert "function taskModal()" in response.text
+    assert '@task-modal-open.window="onOpen($event.detail)"' in response.text
+
+
+def test_quick_add_dispatches_the_modal_open_event_on_success(client: TestClient) -> None:
+    response = client.get("/calendar")
+    assert "$dispatch('task-modal-open'" in response.text
+    assert "_justAdded: true" in response.text
