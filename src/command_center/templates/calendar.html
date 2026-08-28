@@ -135,9 +135,11 @@
           {% endfor %}
           {% for task in cell.tasks %}
           <div
+            x-data="{ downX: 0, downY: 0 }"
             draggable="true"
             @dragstart="$event.dataTransfer.setData('text/plain', '{{ task.id }}'); $event.dataTransfer.effectAllowed = 'move'"
-            @click='$dispatch("task-modal-open", {{ task | tojson }})'
+            @mousedown="downX = $event.clientX; downY = $event.clientY"
+            @mouseup='if (Math.abs($event.clientX - downX) < 4 && Math.abs($event.clientY - downY) < 4) { $dispatch("task-modal-open", {{ task | tojson }}) }'
             class="group/task flex items-center gap-1 rounded border-l-2 {{ 'border-l-rust dark:border-l-rust-light' if task.priority == 1 else 'border-l-stone-300 dark:border-l-stone-600' }} bg-white dark:bg-stone-800 px-1 py-0.5 cursor-pointer hover:border-stone-300 dark:hover:border-stone-600 active:cursor-grabbing"
             title="{{ task.title }}"
           >
@@ -145,6 +147,8 @@
             {% if not cell.is_today %}
             <button
               type="button"
+              @mousedown.stop
+              @mouseup.stop
               @click.stop="fetch('/items/{{ task.id }}/due-date', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ due_date: '{{ today }}' }) }).then(r => { if (r.ok) window.location.reload(); })"
               title="Bring to today"
               class="shrink-0 opacity-0 group-hover/task:opacity-100 text-stone-300 dark:text-stone-600 hover:text-rust dark:hover:text-rust-light text-[10px]"
