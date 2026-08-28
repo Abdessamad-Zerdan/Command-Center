@@ -287,7 +287,30 @@ def test_quick_added_task_appears_on_the_calendar_grid(client: TestClient) -> No
 def test_task_chips_wire_up_click_to_open_the_modal(client: TestClient) -> None:
     queries.create_manual_item("2026-08-01", "urgent", "Click me", due_date="2026-08-20")
     response = client.get("/calendar?month=2026-08")
-    assert '@click=\'$dispatch("task-modal-open"' in response.text
+    # Regression guard: a task chip has draggable="true", and a native
+    # browser drag gesture silently suppresses that same element's own
+    # `click` event — confirmed live, a real mouse click never opened
+    # the popup even though a synthetic .click() call did. Chips must
+    # detect "was this a click" themselves via mousedown/mouseup
+    # position instead of trusting the native (and here, unreliable)
+    # click event.
+    assert "@click='$dispatch(\"task-modal-open\"" not in response.text
+    assert '@mouseup=\'if (Math.abs($event.clientX - downX) < 4 && Math.abs($event.clientY - downY) < 4) { $dispatch("task-modal-open"' in response.text
+    assert '@mousedown="downX = $event.clientX; downY = $event.clientY"' in response.text
+
+
+def test_today_shortcut_button_does_not_bubble_into_the_modal_open_handler(
+    client: TestClient,
+) -> None:
+    # The →today button only renders for a task NOT due today — it
+    # sits inside the draggable chip, and without stopping its own
+    # mousedown/mouseup, clicking it would also satisfy the chip's
+    # movement-threshold check and spuriously pop the detail modal open
+    # right after the due-date change.
+    queries.create_manual_item("2026-08-01", "urgent", "Not due today", due_date="2026-08-05")
+    response = client.get("/calendar?month=2026-08")
+    assert "@mousedown.stop" in response.text
+    assert "@mouseup.stop" in response.text
 
 
 def test_calendar_page_defines_the_task_modal_component_and_listener(client: TestClient) -> None:
