@@ -85,6 +85,8 @@ def test_brief_shows_a_stale_urgent_nudge(client: TestClient) -> None:
 
     assert "Ancient fire drill" in response.text
     assert "sat in Urgent for 2+ days untouched" in response.text
+    assert "Bring to today" in response.text
+    assert "'/move-to-today'" in response.text
 
 
 def test_brief_shows_an_overdue_task_nudge(client: TestClient) -> None:
@@ -105,6 +107,8 @@ def test_brief_shows_an_overdue_task_nudge(client: TestClient) -> None:
 
     assert "Renew the cert" in response.text
     assert "overdue:" in response.text
+    assert "Bring to today" in response.text
+    assert "'/due-date'" in response.text
 
 
 def test_history_page_never_shows_nudges(client: TestClient) -> None:

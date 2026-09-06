@@ -146,19 +146,53 @@
 {% endif %}
 
 {% if nudges %}
-<div class="mx-4 sm:mx-6 mt-3 space-y-1.5" x-data="{ dismissed: [] }" data-reveal>
+<div
+  class="mx-4 sm:mx-6 mt-3 space-y-1.5"
+  x-data="{
+    dismissed: [],
+    bringing: [],
+    bringAllToToday(nudge) {
+      this.bringing.push(nudge.id);
+      const calls = nudge.targets.map(t => {
+        if (nudge.id === 'overdue_tasks') {
+          return fetch('/items/' + t.id + '/due-date', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ due_date: '{{ brief.brief_date }}' }),
+          });
+        }
+        return fetch('/items/' + t.id + '/move-to-today', { method: 'POST' });
+      });
+      Promise.all(calls).then(() => window.location.reload());
+    }
+  }"
+  data-reveal
+>
   {% for nudge in nudges %}
   <div
     x-show="!dismissed.includes('{{ nudge.id }}')"
     x-transition
     class="card-lift flex items-start justify-between gap-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300"
   >
-    <span>{{ nudge.message }}</span>
-    <button
-      type="button"
-      @click="dismissed.push('{{ nudge.id }}')"
-      class="shrink-0 text-amber-600 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-100"
-    >&times;</button>
+    <span class="flex-1">{{ nudge.message }}</span>
+    <div class="flex items-center gap-2 shrink-0">
+      {% if nudge.targets %}
+      <button
+        type="button"
+        :disabled="bringing.includes('{{ nudge.id }}')"
+        @click='bringAllToToday({{ nudge | tojson }})'
+        class="text-[11px] font-medium underline decoration-dotted hover:text-amber-950 dark:hover:text-amber-100 disabled:opacity-50 whitespace-nowrap"
+      >
+        <span x-show="!bringing.includes('{{ nudge.id }}')">Bring to today &rarr;</span>
+        <span x-show="bringing.includes('{{ nudge.id }}')">Moving&hellip;</span>
+      </button>
+      {% endif %}
+      <button
+        type="button"
+        @click="dismissed.push('{{ nudge.id }}')"
+        class="text-amber-600 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-100"
+      >&times;</button>
+    </div>
   </div>
   {% endfor %}
 </div>
