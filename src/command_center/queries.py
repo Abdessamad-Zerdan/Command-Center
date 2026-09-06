@@ -111,8 +111,10 @@ def set_item_status(item_id: int, status: str, snoozed_until: str | None = None)
 
 def move_item_to_date(item_id: int, new_brief_date: str, lane: str | None = None) -> bool:
     """Moves an item to a different day's brief — resets status to
-    'pending' (so it actually shows up there) and optionally changes
-    lane in the same update. Ensures the target day's briefs row exists
+    'pending' and created_at to now (so it actually shows up there, and
+    stops immediately re-tripping the stale-urgent nudge, whose only
+    signal for "untouched" is created_at) and optionally changes lane
+    in the same update. Ensures the target day's briefs row exists
     first, same idiom as create_manual_item. Returns True if a row
     was matched.
     """
@@ -129,8 +131,8 @@ def move_item_to_date(item_id: int, new_brief_date: str, lane: str | None = None
         if row is None:
             return False
 
-        sets = ["brief_date = ?", "status = 'pending'"]
-        params: list[Any] = [new_brief_date]
+        sets = ["brief_date = ?", "status = 'pending'", "created_at = ?"]
+        params: list[Any] = [new_brief_date, now]
         if lane is not None:
             sets.append("lane = ?")
             params.append(lane)

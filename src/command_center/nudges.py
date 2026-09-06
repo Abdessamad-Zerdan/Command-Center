@@ -33,6 +33,7 @@ def compute_nudges(brief_date: str, now: datetime | None = None) -> list[dict]:
                 "id": "stale_urgent",
                 "message": f"{_count(stale)} sat in Urgent for {_STALE_URGENT_DAYS}+ days untouched: "
                 + _examples(stale),
+                "targets": [{"id": item["id"]} for item in stale],
             }
         )
 
@@ -42,6 +43,7 @@ def compute_nudges(brief_date: str, now: datetime | None = None) -> list[dict]:
             {
                 "id": "overdue_tasks",
                 "message": f"{_count(overdue)} overdue: " + _examples(overdue),
+                "targets": [{"id": item["id"]} for item in overdue],
             }
         )
 

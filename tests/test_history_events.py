@@ -510,6 +510,19 @@ def test_move_item_to_date_updates_brief_date_and_resets_status(isolated_db: Non
     assert row["lane"] == "action_items"  # unchanged, no lane override passed
 
 
+def test_move_item_to_date_resets_created_at(isolated_db: None) -> None:
+    # created_at is the only signal the stale-urgent nudge uses for
+    # "untouched" — moving an item to today counts as touching it, so
+    # the nudge shouldn't immediately re-fire for it on the next load.
+    item_id = _seed_item("2026-08-14", "urgent", "gmail", "gt7", "Old alert")
+
+    queries.move_item_to_date(item_id, "2026-08-17")
+
+    with db.session() as conn:
+        row = conn.execute("SELECT created_at FROM items WHERE id = ?", (item_id,)).fetchone()
+    assert row["created_at"] != "2026-08-14T10:00:00"
+
+
 def test_move_item_to_date_can_change_lane_too(isolated_db: None) -> None:
     item_id = _seed_item("2026-08-14", "action_items", "google_tasks", "gt4", "Old task")
 
