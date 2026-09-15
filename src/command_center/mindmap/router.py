@@ -47,11 +47,13 @@ def _validate_date(value: str | None) -> None:
         raise HTTPException(status_code=400, detail=f"Invalid date: {value!r}") from exc
 
 
-def _resolve_linked_label_id(board_id: int, kind: str, linked_label_id: int | None) -> int | None:
-    """A label never links to another label, and a link must point at a
-    label that actually exists on this same board — otherwise silently
-    drop it rather than 500 on a stale client-side option."""
-    if kind == "label" or linked_label_id is None:
+def _resolve_linked_label_id(board_id: int, linked_label_id: int | None) -> int | None:
+    """A link must point at a label that actually exists on this same
+    board. Any card — including another label, making it a sublabel —
+    may set this; nothing here stops a label linking to itself or a
+    short cycle (A -> B -> A), a deliberate simplicity trade-off for a
+    personal single-board tool rather than a public graph editor."""
+    if linked_label_id is None:
         return None
     valid_ids = {label["id"] for label in queries.list_labels_on_board(board_id)}
     if linked_label_id not in valid_ids:
@@ -130,7 +132,7 @@ def create_map_node_route(payload: MapNodeIn):
     if payload.kind not in queries.MAP_NODE_KINDS:
         raise HTTPException(status_code=400, detail=f"Unknown kind: {payload.kind!r}")
     _validate_date(payload.target_date)
-    linked_label_id = _resolve_linked_label_id(payload.board_id, payload.kind, payload.linked_label_id)
+    linked_label_id = _resolve_linked_label_id(payload.board_id, payload.linked_label_id)
 
     if payload.kind == "project":
         if payload.project_id is None:
@@ -176,25 +178,39 @@ class MapNodeUpdateIn(BaseModel):
     title: str
     note: str = ""
     target_date: str | None = None
-    linked_label_id: int | None = None
 
 
 @router.patch("/map/nodes/{node_id}")
 def update_map_node_route(node_id: int, payload: MapNodeUpdateIn):
-    existing = queries.get_map_node(node_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail="Node not found")
     title = payload.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Title can't be empty")
     _validate_date(payload.target_date)
-    linked_label_id = _resolve_linked_label_id(existing["board_id"], existing["kind"], payload.linked_label_id)
 
-    if not queries.update_map_node(
-        node_id, title=title, note=payload.note.strip(), target_date=payload.target_date or None,
-        linked_label_id=linked_label_id,
-    ):
+    if not queries.update_map_node(node_id, title=title, note=payload.note.strip(), target_date=payload.target_date or None):
         raise HTTPException(status_code=404, detail="Node not found, or it's a pinned project card (edit the project itself instead)")
+    return {"ok": True}
+
+
+class MapNodeLabelLinkIn(BaseModel):
+    linked_label_id: int | None = None
+
+
+@router.patch("/map/nodes/{node_id}/label")
+def update_map_node_label_link_route(node_id: int, payload: MapNodeLabelLinkIn):
+    # A separate endpoint from the one above rather than folding this
+    # into MapNodeUpdateIn: update_map_node's WHERE project_id IS NULL
+    # guard exists specifically to keep a pinned project's title/note
+    # locked to the project it mirrors, but a project card should still
+    # be linkable to a label (both the drag gesture and the picker work
+    # on every kind) — that would be impossible if this shared the same
+    # guarded write.
+    existing = queries.get_map_node(node_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    linked_label_id = _resolve_linked_label_id(existing["board_id"], payload.linked_label_id)
+    if not queries.update_map_node_label_link(node_id, linked_label_id):
+        raise HTTPException(status_code=404, detail="Node not found")
     return {"ok": True}
 
 

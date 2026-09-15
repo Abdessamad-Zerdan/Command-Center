@@ -156,31 +156,53 @@ def test_update_map_node_position(client: TestClient, board_id: int) -> None:
     assert node["y"] == 62.25
 
 
-def test_update_map_node_edits_title_note_date_and_label_link(client: TestClient, board_id: int) -> None:
-    label_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
+def test_update_map_node_edits_title_note_and_date(client: TestClient, board_id: int) -> None:
     node_id = queries.create_map_node(board_id=board_id, kind="hackathon", title="Old title", x=10, y=10)
 
-    updated = queries.update_map_node(
-        node_id, title="New title", note="New note", target_date="2026-10-01", linked_label_id=label_id
-    )
+    updated = queries.update_map_node(node_id, title="New title", note="New note", target_date="2026-10-01")
 
     assert updated is True
     node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == node_id)
     assert node["title"] == "New title"
     assert node["note"] == "New note"
     assert node["target_date"] == "2026-10-01"
-    assert node["linked_label_id"] == label_id
 
 
 def test_update_map_node_refuses_a_project_linked_card(client: TestClient, board_id: int, tmp_path: Path) -> None:
     project_id = queries.create_registered_project("Foo", str(tmp_path))
     node_id = queries.create_map_node(board_id=board_id, kind="project", project_id=project_id, x=10, y=10)
 
-    updated = queries.update_map_node(node_id, title="Hijacked title", note="", target_date=None, linked_label_id=None)
+    updated = queries.update_map_node(node_id, title="Hijacked title", note="", target_date=None)
 
     assert updated is False
     node = queries.list_map_nodes(board_id)[0]
     assert node["title"] == ""  # untouched
+
+
+def test_update_map_node_label_link_sets_and_clears(client: TestClient, board_id: int) -> None:
+    label_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
+    node_id = queries.create_map_node(board_id=board_id, kind="hackathon", title="HackX", x=10, y=10)
+
+    assert queries.update_map_node_label_link(node_id, label_id) is True
+    node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == node_id)
+    assert node["linked_label_id"] == label_id
+
+    assert queries.update_map_node_label_link(node_id, None) is True
+    node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == node_id)
+    assert node["linked_label_id"] is None
+
+
+def test_update_map_node_label_link_works_on_a_project_card(client: TestClient, board_id: int, tmp_path: Path) -> None:
+    # Unlike update_map_node (title/note/date), the label link isn't
+    # blocked by the project_id IS NULL guard — a pinned project should
+    # still be linkable to a label even though its text stays mirrored.
+    project_id = queries.create_registered_project("Foo", str(tmp_path))
+    node_id = queries.create_map_node(board_id=board_id, kind="project", project_id=project_id, x=10, y=10)
+    label_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
+
+    assert queries.update_map_node_label_link(node_id, label_id) is True
+    node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == node_id)
+    assert node["linked_label_id"] == label_id
 
 
 def test_delete_map_node_removes_row(client: TestClient, board_id: int) -> None:
@@ -324,6 +346,19 @@ def test_create_label_node(client: TestClient, board_id: int) -> None:
     assert node["title"] == "September"
 
 
+def test_create_a_sublabel(client: TestClient, board_id: int) -> None:
+    parent_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
+
+    response = client.post(
+        "/map/nodes",
+        json={"board_id": board_id, "kind": "label", "title": "Week 1", "linked_label_id": parent_id},
+    )
+
+    assert response.status_code == 200
+    node = next(n for n in queries.list_map_nodes(board_id) if n["title"] == "Week 1")
+    assert node["linked_label_id"] == parent_id
+
+
 def test_create_node_with_a_valid_label_link(client: TestClient, board_id: int) -> None:
     label_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
 
@@ -433,28 +468,6 @@ def test_patch_node_edits_text_fields(client: TestClient, board_id: int) -> None
     assert node["target_date"] == "2026-11-01"
 
 
-def test_patch_node_sets_a_label_link(client: TestClient, board_id: int) -> None:
-    label_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
-    node_id = queries.create_map_node(board_id=board_id, kind="research", title="Old", x=10, y=10)
-
-    response = client.patch(f"/map/nodes/{node_id}", json={"title": "Old", "linked_label_id": label_id})
-
-    assert response.status_code == 200
-    node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == node_id)
-    assert node["linked_label_id"] == label_id
-
-
-def test_patch_node_rejects_a_label_from_a_different_board(client: TestClient) -> None:
-    sept = queries.create_map_board("September")
-    october = queries.create_map_board("October")
-    other_label_id = queries.create_map_node(board_id=october, kind="label", title="October", x=5, y=5)
-    node_id = queries.create_map_node(board_id=sept, kind="research", title="Old", x=10, y=10)
-
-    response = client.patch(f"/map/nodes/{node_id}", json={"title": "Old", "linked_label_id": other_label_id})
-
-    assert response.status_code == 400
-
-
 def test_patch_node_rejects_empty_title(client: TestClient, board_id: int) -> None:
     node_id = queries.create_map_node(board_id=board_id, kind="research", title="Old", x=10, y=10)
     response = client.patch(f"/map/nodes/{node_id}", json={"title": "  "})
@@ -472,6 +485,82 @@ def test_patch_node_404_for_a_project_linked_card(client: TestClient, board_id: 
 
 def test_patch_node_404_for_unknown_node(client: TestClient) -> None:
     response = client.patch("/map/nodes/99999", json={"title": "New"})
+    assert response.status_code == 404
+
+
+# --- PATCH /map/nodes/{id}/label --------------------------------------------
+
+
+def test_patch_label_link_route(client: TestClient, board_id: int) -> None:
+    label_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
+    node_id = queries.create_map_node(board_id=board_id, kind="research", title="Old", x=10, y=10)
+
+    response = client.patch(f"/map/nodes/{node_id}/label", json={"linked_label_id": label_id})
+
+    assert response.status_code == 200
+    node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == node_id)
+    assert node["linked_label_id"] == label_id
+
+
+def test_patch_label_link_route_clears_with_null(client: TestClient, board_id: int) -> None:
+    label_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
+    node_id = queries.create_map_node(board_id=board_id, kind="research", title="Old", linked_label_id=label_id, x=10, y=10)
+
+    response = client.patch(f"/map/nodes/{node_id}/label", json={"linked_label_id": None})
+
+    assert response.status_code == 200
+    node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == node_id)
+    assert node["linked_label_id"] is None
+
+
+def test_patch_label_link_route_works_on_a_project_card(client: TestClient, board_id: int, tmp_path: Path) -> None:
+    project_id = queries.create_registered_project("Foo", str(tmp_path))
+    node_id = queries.create_map_node(board_id=board_id, kind="project", project_id=project_id, x=10, y=10)
+    label_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
+
+    response = client.patch(f"/map/nodes/{node_id}/label", json={"linked_label_id": label_id})
+
+    assert response.status_code == 200
+    node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == node_id)
+    assert node["linked_label_id"] == label_id
+
+
+def test_patch_label_link_route_allows_a_sublabel(client: TestClient, board_id: int) -> None:
+    parent_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
+    child_id = queries.create_map_node(board_id=board_id, kind="label", title="Week 1", x=10, y=10)
+
+    response = client.patch(f"/map/nodes/{child_id}/label", json={"linked_label_id": parent_id})
+
+    assert response.status_code == 200
+    node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == child_id)
+    assert node["linked_label_id"] == parent_id
+
+
+def test_patch_label_link_route_allows_a_self_link(client: TestClient, board_id: int) -> None:
+    # No cycle/self-link guard by design (see _resolve_linked_label_id) —
+    # a deliberate simplicity trade-off for a personal single-board tool.
+    label_id = queries.create_map_node(board_id=board_id, kind="label", title="September", x=5, y=5)
+
+    response = client.patch(f"/map/nodes/{label_id}/label", json={"linked_label_id": label_id})
+
+    assert response.status_code == 200
+    node = next(n for n in queries.list_map_nodes(board_id) if n["id"] == label_id)
+    assert node["linked_label_id"] == label_id
+
+
+def test_patch_label_link_route_rejects_a_label_from_a_different_board(client: TestClient) -> None:
+    sept = queries.create_map_board("September")
+    october = queries.create_map_board("October")
+    other_label_id = queries.create_map_node(board_id=october, kind="label", title="October", x=5, y=5)
+    node_id = queries.create_map_node(board_id=sept, kind="research", title="Old", x=10, y=10)
+
+    response = client.patch(f"/map/nodes/{node_id}/label", json={"linked_label_id": other_label_id})
+
+    assert response.status_code == 400
+
+
+def test_patch_label_link_route_404_for_unknown_node(client: TestClient) -> None:
+    response = client.patch("/map/nodes/99999/label", json={"linked_label_id": None})
     assert response.status_code == 404
 
 

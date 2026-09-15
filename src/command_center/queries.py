@@ -1381,17 +1381,27 @@ def update_map_node_position(node_id: int, x: float, y: float) -> bool:
         return cursor.rowcount > 0
 
 
-def update_map_node(
-    node_id: int, title: str, note: str, target_date: str | None, linked_label_id: int | None
-) -> bool:
+def update_map_node(node_id: int, title: str, note: str, target_date: str | None) -> bool:
     """Edits a card's own text — restricted to non-project cards
     (`project_id IS NULL`) since a kind='project' card's title/note
     always mirrors the linked project instead of storing its own."""
     with session() as conn:
         cursor = conn.execute(
-            "UPDATE map_nodes SET title = ?, note = ?, target_date = ?, linked_label_id = ? "
-            "WHERE id = ? AND project_id IS NULL",
-            (title, note, target_date, linked_label_id, node_id),
+            "UPDATE map_nodes SET title = ?, note = ?, target_date = ? WHERE id = ? AND project_id IS NULL",
+            (title, note, target_date, node_id),
+        )
+        return cursor.rowcount > 0
+
+
+def update_map_node_label_link(node_id: int, linked_label_id: int | None) -> bool:
+    """Sets or clears which label a card points at — unlike
+    update_map_node above, this isn't guarded by project_id IS NULL: a
+    pinned project's title/note/target_date stay locked to the project
+    it mirrors, but the project card itself should still be linkable
+    to a label like any other kind."""
+    with session() as conn:
+        cursor = conn.execute(
+            "UPDATE map_nodes SET linked_label_id = ? WHERE id = ?", (linked_label_id, node_id)
         )
         return cursor.rowcount > 0
 
