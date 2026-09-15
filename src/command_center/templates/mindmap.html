@@ -74,13 +74,21 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
     dragOrigX: 0, dragOrigY: 0,
     moved: false,
 
+    // Dragging FROM a card's pin dot draws a connector instead of
+    // moving the card — a separate gesture from startDrag/onDrag above,
+    // triggered on the pin dot itself with .stop so it doesn't also
+    // start a move-drag on the parent card.
+    connectingFromId: null,
+    connectFrom: { x: 0, y: 0 },
+    connectCursor: { x: 0, y: 0 },
+
     adding: false,
     newKind: 'target',
     newTitle: '', newNote: '', newTargetDate: '', newProjectId: '', newLinkedLabelId: '',
     addError: '',
 
     active: null,
-    editTitle: '', editNote: '', editTargetDate: '', editLinkedLabelId: '',
+    editTitle: '', editNote: '', editTargetDate: '',
     editSaving: false, editError: '',
 
     kindMeta: {
@@ -94,6 +102,10 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
 
     get labelOptions() {
       return this.nodes.filter(n => n.kind === 'label');
+    },
+    get activeLabelOptions() {
+      if (!this.active) return this.labelOptions;
+      return this.labelOptions.filter(l => l.id !== this.active.id);
     },
 
     cardTitle(node) {
@@ -115,10 +127,15 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       this.canvasPx = { w: rect.width, h: rect.height };
     },
 
-    // Hand-drawn connector from each card's linked label to itself —
+    // A hand-drawn connector from each card's linked label to itself —
     // computed in real pixels (not the 0-100 percent space cards use)
     // so the curve doesn't distort on a non-square canvas, and as a
-    // getter so it stays in sync while a card is mid-drag.
+    // getter so it stays in sync while a card is mid-drag. Two chained
+    // quadratic segments through jittered midpoints (not one smooth
+    // arc) so it reads as sketched, not ruler-drawn; a label-to-label
+    // link (a sublabel) additionally gets a small hand-drawn loop
+    // flourish at its midpoint and its own color, so hierarchy between
+    // labels reads differently at a glance from a label's membership.
     get connectorPaths() {
       if (!this.canvasPx.w || !this.canvasPx.h) return [];
       const anchorOffsetX = 78; // ~ half a card's width — approximate, not pixel-exact
@@ -131,21 +148,45 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       this.nodes.forEach(n => { if (n.kind === 'label') labelsById[n.id] = n; });
       const paths = [];
       this.nodes.forEach(n => {
-        if (n.kind === 'label' || !n.linked_label_id) return;
+        if (!n.linked_label_id) return;
         const label = labelsById[n.linked_label_id];
         if (!label) return;
         const a = toPx(label), b = toPx(n);
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const nx = -dy / len, ny = dx / len;
-        // Deterministic per-pair wobble (not random) so the curve's
-        // shape doesn't reshuffle itself on every re-render.
-        const wobble = ((label.id * 53 + n.id * 17) % 21) - 10;
-        const cx = (a.x + b.x) / 2 + nx * wobble;
-        const cy = (a.y + b.y) / 2 + ny * wobble;
-        paths.push({ id: label.id + '-' + n.id, d: `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}` });
+        paths.push({
+          id: label.id + '-' + n.id,
+          d: this.sketchyPath(a, b, label.id * 53 + n.id * 17),
+          isSublabel: n.kind === 'label',
+          loop: n.kind === 'label' ? this.loopFlourish(a, b, label.id * 31 + n.id * 11) : null,
+        });
       });
       return paths;
+    },
+
+    // Two quadratic segments joined at a shared midpoint (C1-continuous,
+    // so the join doesn't kink) through two independently-jittered
+    // control points, instead of one mathematically-smooth arc — reads
+    // as a wavier, sketched-by-hand stroke. Deterministic per pair (not
+    // Math.random()) so the wobble doesn't reshuffle on every re-render.
+    sketchyPath(a, b, seed) {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len, ny = dx / len;
+      const w1 = ((seed * 53) % 25) - 12;
+      const w2 = ((seed * 31 + 7) % 19) - 9;
+      const m1x = a.x + dx * 0.33 + nx * w1, m1y = a.y + dy * 0.33 + ny * w1;
+      const m2x = a.x + dx * 0.66 + nx * w2, m2y = a.y + dy * 0.66 + ny * w2;
+      const jx = (m1x + m2x) / 2, jy = (m1y + m2y) / 2;
+      return `M ${a.x} ${a.y} Q ${m1x} ${m1y} ${jx} ${jy} Q ${m2x} ${m2y} ${b.x} ${b.y}`;
+    },
+
+    // A small irregular loop at a sublabel connector's midpoint — the
+    // "circle a word to show it belongs" doodle, not a geometric curve.
+    loopFlourish(a, b, seed) {
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      const r = 8 + (seed % 4);
+      const squish = 0.6 + ((seed % 5) / 10);
+      const rotate = (seed * 17) % 40 - 20;
+      return { cx: mx, cy: my, rx: r, ry: r * squish, rotate };
     },
 
     // <svg> children need real markup, not Alpine's template x-for —
@@ -159,9 +200,20 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
     // (computed path coordinates) ever land in this string — never
     // user-typed text — so there's no injection risk in using x-html.
     get connectorMarkup() {
-      return this.connectorPaths
-        .map(p => `<path d="${p.d}" fill="none" stroke-width="2" stroke-linecap="round" marker-end="url(#map-arrow)"></path>`)
-        .join('');
+      let markup = this.connectorPaths.map(p => {
+        const cls = p.isSublabel ? 'stroke-rust dark:stroke-rust-light' : 'stroke-stone-400 dark:stroke-stone-500';
+        let segment = `<path d="${p.d}" fill="none" stroke-width="2" stroke-linecap="round" class="${cls}" marker-end="url(#map-arrow-${p.isSublabel ? 'sub' : 'default'})"></path>`;
+        if (p.loop) {
+          const l = p.loop;
+          segment += `<ellipse cx="${l.cx}" cy="${l.cy}" rx="${l.rx}" ry="${l.ry}" transform="rotate(${l.rotate} ${l.cx} ${l.cy})" fill="none" stroke-width="1.6" class="${cls}"></ellipse>`;
+        }
+        return segment;
+      }).join('');
+      if (this.connectingFromId !== null) {
+        const f = this.connectFrom, c = this.connectCursor;
+        markup += `<path d="M ${f.x} ${f.y} L ${c.x} ${c.y}" fill="none" stroke-width="2" stroke-dasharray="5 5" class="stroke-stone-400 dark:stroke-stone-500"></path>`;
+      }
+      return markup;
     },
 
     startDrag(event, node) {
@@ -175,8 +227,16 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       event.currentTarget.setPointerCapture(event.pointerId);
     },
     onDrag(event) {
-      if (this.dragId === null) return;
+      // Bound to @pointermove.window — fires on every pointer move
+      // anywhere on the page, so bail immediately unless a card-drag or
+      // a connector-drag is actually in progress, rather than reading
+      // $refs.canvas (and recomputing a rect) on every idle mouse move.
+      if (this.dragId === null && this.connectingFromId === null) return;
       const canvas = this.$refs.canvas.getBoundingClientRect();
+      if (this.connectingFromId !== null) {
+        this.connectCursor = { x: event.clientX - canvas.left, y: event.clientY - canvas.top };
+      }
+      if (this.dragId === null) return;
       const dxPct = ((event.clientX - this.dragStartX) / canvas.width) * 100;
       const dyPct = ((event.clientY - this.dragStartY) / canvas.height) * 100;
       if (Math.abs(dxPct) > 0.3 || Math.abs(dyPct) > 0.3) this.moved = true;
@@ -205,6 +265,59 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       }
     },
 
+    // Drag FROM a card's pin dot to a label (or from a label to any
+    // card) to link them, instead of picking from the "Link to label"
+    // select. Whichever end is the label becomes the parent; if both
+    // ends are labels (a sublabel), the card the drag STARTED from
+    // becomes the child pointing at the one it was dropped on.
+    startConnect(event, node) {
+      if (event.button !== undefined && event.button !== 0) return;
+      this.connectingFromId = node.id;
+      const canvas = this.$refs.canvas.getBoundingClientRect();
+      this.connectFrom = { x: event.clientX - canvas.left, y: event.clientY - canvas.top };
+      this.connectCursor = { ...this.connectFrom };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    endConnect(event) {
+      if (this.connectingFromId === null) return;
+      const sourceId = this.connectingFromId;
+      this.connectingFromId = null;
+      const dropEl = document.elementFromPoint(event.clientX, event.clientY);
+      const cardEl = dropEl ? dropEl.closest('.map-card') : null;
+      if (!cardEl) return;
+      const targetId = Number(cardEl.dataset.nodeId);
+      if (!targetId || targetId === sourceId) return;
+      this.linkNodes(sourceId, targetId);
+    },
+    linkNodes(sourceId, targetId) {
+      const source = this.nodes.find(n => n.id === sourceId);
+      const target = this.nodes.find(n => n.id === targetId);
+      if (!source || !target) return;
+      let childId, parentId;
+      if (target.kind === 'label') {
+        childId = sourceId; parentId = targetId;
+      } else if (source.kind === 'label') {
+        childId = targetId; parentId = sourceId;
+      } else {
+        return; // neither end is a label — nothing to link
+      }
+      this.setLabelLink(childId, parentId);
+    },
+    setLabelLink(nodeId, linkedLabelId) {
+      const node = this.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+      fetch('/map/nodes/' + nodeId + '/label', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ linked_label_id: linkedLabelId }),
+      }).then(r => {
+        if (r.ok) {
+          node.linked_label_id = linkedLabelId;
+          if (this.active && this.active.id === nodeId) this.active.linked_label_id = linkedLabelId;
+        }
+      });
+    },
+
     openAdd() {
       this.adding = true;
       this.newKind = this.pinnableProjects.length ? 'project' : 'target';
@@ -221,11 +334,9 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
         if (!this.newTitle.trim()) { this.addError = 'Title is required.'; return; }
         payload.title = this.newTitle.trim();
         payload.note = this.newNote.trim();
-        if (this.newKind !== 'label') {
-          payload.target_date = this.newTargetDate || null;
-          if (this.newLinkedLabelId) payload.linked_label_id = Number(this.newLinkedLabelId);
-        }
+        if (this.newKind !== 'label') payload.target_date = this.newTargetDate || null;
       }
+      if (this.newLinkedLabelId) payload.linked_label_id = Number(this.newLinkedLabelId);
       fetch('/map/nodes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -242,16 +353,18 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       this.editTitle = node.kind === 'project' ? '' : node.title;
       this.editNote = node.kind === 'project' ? '' : node.note;
       this.editTargetDate = node.target_date || '';
-      this.editLinkedLabelId = node.linked_label_id || '';
       this.editSaving = false;
       this.editError = '';
     },
     closeDetail() { this.active = null; },
+    // Own-text fields (title/note/date) and the label link save
+    // independently: the link works on every kind including
+    // kind='project', whose title/note/date stay locked to the
+    // project it mirrors (see update_map_node_label_link's docstring).
     saveDetail() {
       if (!this.active || this.active.kind === 'project') return;
       this.editSaving = true; this.editError = '';
       const isLabel = this.active.kind === 'label';
-      const linkedLabelId = isLabel ? null : (this.editLinkedLabelId ? Number(this.editLinkedLabelId) : null);
       fetch('/map/nodes/' + this.active.id, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -259,7 +372,6 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
           title: this.editTitle.trim(),
           note: this.editNote.trim(),
           target_date: isLabel ? null : (this.editTargetDate || null),
-          linked_label_id: linkedLabelId,
         }),
       }).then(async r => {
         this.editSaving = false;
@@ -268,7 +380,6 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
         this.active.title = this.editTitle.trim();
         this.active.note = this.editNote.trim();
         this.active.target_date = isLabel ? null : (this.editTargetDate || null);
-        this.active.linked_label_id = linkedLabelId;
       });
     },
     removeActive() {
@@ -344,8 +455,11 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
   >
     <svg class="absolute inset-0 pointer-events-none" style="width: 100%; height: 100%;">
       <defs>
-        <marker id="map-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <marker id="map-arrow-default" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
           <path d="M0,0 L6,3 L0,6 Z" class="fill-stone-400 dark:fill-stone-500" />
+        </marker>
+        <marker id="map-arrow-sub" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" class="fill-rust dark:fill-rust-light" />
         </marker>
       </defs>
       <g x-html="connectorMarkup" class="stroke-stone-400 dark:stroke-stone-500"></g>
@@ -356,10 +470,16 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
         class="map-card card-lift absolute select-none cursor-grab active:cursor-grabbing rounded-xl px-3 py-2.5"
         :class="node.kind === 'label' ? kindMeta.label.badge + ' w-auto max-w-xs' : kindMeta[node.kind].badge + ' w-36 sm:w-44 border'"
         :style="`left: ${node.x}%; top: ${node.y}%; transform: rotate(${rotation(node)}deg); transform-origin: center;`"
+        :data-node-id="node.id"
         @pointerdown="startDrag($event, node)"
         @pointerup="endDrag($event, node)"
       >
-        <span class="map-pin absolute -top-1.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-rust dark:bg-rust-light border border-white/60 dark:border-stone-900/60"></span>
+        <span
+          class="map-pin absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-rust dark:bg-rust-light border border-white/60 dark:border-stone-900/60 cursor-crosshair"
+          title="Drag to link to a label"
+          @pointerdown.stop="startConnect($event, node)"
+          @pointerup.stop="endConnect($event)"
+        ></span>
 
         <template x-if="node.kind === 'label'">
           <div>
@@ -409,19 +529,17 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
         <div class="space-y-2">
           <input type="text" x-model="newTitle" :placeholder="newKind === 'label' ? 'e.g. September' : 'Title'" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
           <textarea x-model="newNote" placeholder="Note (optional)" rows="2" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-none"></textarea>
-          <template x-if="newKind !== 'label'">
-            <div class="space-y-2">
-              <input type="date" x-model="newTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
-              <select x-show="labelOptions.length > 0" x-model="newLinkedLabelId" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
-                <option value="">No label</option>
-                <template x-for="l in labelOptions" :key="l.id">
-                  <option :value="l.id" x-text="'Link to ' + l.title"></option>
-                </template>
-              </select>
-            </div>
-          </template>
+          <input x-show="newKind !== 'label'" type="date" x-model="newTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
         </div>
       </template>
+
+      <!-- Available for every kind, including project and label (a label linking to another label is a sublabel) -->
+      <select x-show="labelOptions.length > 0" x-model="newLinkedLabelId" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light mt-2">
+        <option value="">No label</option>
+        <template x-for="l in labelOptions" :key="l.id">
+          <option :value="l.id" x-text="'Link to ' + l.title"></option>
+        </template>
+      </select>
 
       <p x-show="addError" x-text="addError" class="text-[11px] text-red-600 dark:text-red-400 mt-2"></p>
 
@@ -454,23 +572,28 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
           <div class="space-y-2">
             <input type="text" x-model="editTitle" class="w-full font-serif text-base bg-transparent border-b border-stone-200 dark:border-stone-700 px-0 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
             <textarea x-model="editNote" rows="3" placeholder="Note" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-none"></textarea>
-            <template x-if="active.kind !== 'label'">
-              <div class="space-y-2">
-                <input type="date" x-model="editTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
-                <select x-show="labelOptions.length > 0" x-model="editLinkedLabelId" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
-                  <option value="">No label</option>
-                  <template x-for="l in labelOptions" :key="l.id">
-                    <option :value="l.id" x-text="'Link to ' + l.title"></option>
-                  </template>
-                </select>
-              </div>
-            </template>
+            <input x-show="active.kind !== 'label'" type="date" x-model="editTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
             <p x-show="editError" x-text="editError" class="text-[11px] text-red-600 dark:text-red-400"></p>
             <button type="button" @click="saveDetail()" :disabled="editSaving" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">
               <span x-show="!editSaving">Save</span><span x-show="editSaving">Saving&hellip;</span>
             </button>
           </div>
         </template>
+
+        <!-- Available for every kind, including project (its title/note/date
+             stay locked to the project, but the label link is independent —
+             see update_map_node_label_link) and label (a sublabel link). -->
+        <select
+          x-show="activeLabelOptions.length > 0"
+          :value="active.linked_label_id || ''"
+          @change="setLabelLink(active.id, $event.target.value ? Number($event.target.value) : null)"
+          class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light mt-2"
+        >
+          <option value="">No label</option>
+          <template x-for="l in activeLabelOptions" :key="l.id">
+            <option :value="l.id" x-text="'Link to ' + l.title"></option>
+          </template>
+        </select>
 
         <div class="flex items-center justify-end mt-4 pt-3 border-t border-stone-100 dark:border-stone-700">
           <button type="button" @click="removeActive()" class="text-[11px] text-stone-400 dark:text-stone-500 hover:text-red-600 dark:hover:text-red-400">
