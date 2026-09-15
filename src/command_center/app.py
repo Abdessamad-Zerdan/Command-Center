@@ -21,6 +21,7 @@ from command_center.calendar_view.router import router as calendar_router
 from command_center.finances.router import router as finances_router
 from command_center.fitness.router import router as fitness_router
 from command_center.history.router import router as history_router
+from command_center.mindmap.router import router as mindmap_router
 from command_center.projects.router import router as projects_router
 from command_center.scheduling.router import router as scheduling_router
 from command_center.config import (
@@ -144,6 +145,7 @@ app.include_router(fitness_router)
 app.include_router(history_router)  # before any @app.get("/history/{brief_date}") is registered below
 app.include_router(scheduling_router)
 app.include_router(projects_router)
+app.include_router(mindmap_router)
 
 # Timeline strip window — business hours are what fit on a phone without scrolling.
 TIMELINE_START_HOUR = 8

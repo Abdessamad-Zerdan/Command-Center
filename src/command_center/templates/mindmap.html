@@ -1,0 +1,297 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Map{% endblock %}
+
+{% block extra_head %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Kalam:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  .map-font-title { font-family: 'Caveat', cursive; }
+  .map-font-hand { font-family: 'Kalam', cursive; }
+  .map-canvas {
+    background-image: radial-gradient(circle, rgba(181, 86, 58, 0.10) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .dark .map-canvas {
+    background-image: radial-gradient(circle, rgba(217, 119, 87, 0.12) 1px, transparent 1px);
+  }
+  .map-card { touch-action: none; }
+  .map-pin { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
+</style>
+{% endblock %}
+
+{% block content %}
+<script>
+function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
+  return {
+    nodes: initialNodes,
+    pinnableProjects: pinnableProjects,
+    kinds: kinds,
+
+    dragId: null,
+    dragStartX: 0, dragStartY: 0,
+    dragOrigX: 0, dragOrigY: 0,
+    moved: false,
+
+    adding: false,
+    newKind: 'target',
+    newTitle: '', newNote: '', newTargetDate: '', newProjectId: '',
+    addError: '',
+
+    active: null,
+    editTitle: '', editNote: '', editTargetDate: '',
+    editSaving: false, editError: '',
+
+    kindMeta: {
+      project: { label: 'Project', badge: 'bg-[#faece7] dark:bg-rust-light/10 text-rust dark:text-rust-light border-rust/30 dark:border-rust-light/30' },
+      target: { label: 'Target', badge: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700' },
+      hackathon: { label: 'Hackathon', badge: 'bg-sky-50 dark:bg-sky-900/20 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-700' },
+      competition: { label: 'Competition', badge: 'bg-violet-50 dark:bg-violet-900/20 text-violet-800 dark:text-violet-300 border-violet-300 dark:border-violet-700' },
+      research: { label: 'Research', badge: 'bg-stone-100 dark:bg-stone-700 text-stone-600 dark:text-stone-300 border-stone-300 dark:border-stone-600' },
+    },
+
+    cardTitle(node) {
+      return node.kind === 'project' ? node.project_name : node.title;
+    },
+    cardNote(node) {
+      if (node.kind === 'project') return node.project_current_sprint || node.project_description || '';
+      return node.note || '';
+    },
+    rotation(node) {
+      // Deterministic -3..3deg wobble per card, so it reads as
+      // hand-placed instead of re-jittering on every reload.
+      return ((node.id * 37) % 7) - 3;
+    },
+
+    startDrag(event, node) {
+      if (event.button !== undefined && event.button !== 0) return;
+      this.dragId = node.id;
+      this.moved = false;
+      this.dragStartX = event.clientX;
+      this.dragStartY = event.clientY;
+      this.dragOrigX = node.x;
+      this.dragOrigY = node.y;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    onDrag(event) {
+      if (this.dragId === null) return;
+      const canvas = this.$refs.canvas.getBoundingClientRect();
+      const dxPct = ((event.clientX - this.dragStartX) / canvas.width) * 100;
+      const dyPct = ((event.clientY - this.dragStartY) / canvas.height) * 100;
+      if (Math.abs(dxPct) > 0.3 || Math.abs(dyPct) > 0.3) this.moved = true;
+      const node = this.nodes.find(n => n.id === this.dragId);
+      if (!node) return;
+      node.x = Math.max(2, Math.min(72, this.dragOrigX + dxPct));
+      node.y = Math.max(2, Math.min(84, this.dragOrigY + dyPct));
+    },
+    endDrag(event, node) {
+      if (this.dragId === null) return;
+      const wasMoved = this.moved;
+      const draggedId = this.dragId;
+      this.dragId = null;
+      this.moved = false;
+      if (wasMoved) {
+        const n = this.nodes.find(x => x.id === draggedId);
+        if (n) {
+          fetch('/map/nodes/' + draggedId + '/position', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ x: n.x, y: n.y }),
+          });
+        }
+      } else {
+        this.openDetail(node);
+      }
+    },
+
+    openAdd() {
+      this.adding = true;
+      this.newKind = this.pinnableProjects.length ? 'project' : 'target';
+      this.newTitle = ''; this.newNote = ''; this.newTargetDate = ''; this.newProjectId = '';
+      this.addError = '';
+    },
+    submitAdd() {
+      this.addError = '';
+      const payload = { kind: this.newKind, x: 15 + Math.random() * 55, y: 15 + Math.random() * 60 };
+      if (this.newKind === 'project') {
+        if (!this.newProjectId) { this.addError = 'Pick a project.'; return; }
+        payload.project_id = Number(this.newProjectId);
+      } else {
+        if (!this.newTitle.trim()) { this.addError = 'Title is required.'; return; }
+        payload.title = this.newTitle.trim();
+        payload.note = this.newNote.trim();
+        payload.target_date = this.newTargetDate || null;
+      }
+      fetch('/map/nodes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).then(async r => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { this.addError = data.detail || 'Could not add that card.'; return; }
+        window.location.reload();
+      });
+    },
+
+    openDetail(node) {
+      this.active = node;
+      this.editTitle = node.kind === 'project' ? '' : node.title;
+      this.editNote = node.kind === 'project' ? '' : node.note;
+      this.editTargetDate = node.target_date || '';
+      this.editSaving = false;
+      this.editError = '';
+    },
+    closeDetail() { this.active = null; },
+    saveDetail() {
+      if (!this.active || this.active.kind === 'project') return;
+      this.editSaving = true; this.editError = '';
+      fetch('/map/nodes/' + this.active.id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: this.editTitle.trim(), note: this.editNote.trim(), target_date: this.editTargetDate || null }),
+      }).then(async r => {
+        this.editSaving = false;
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { this.editError = data.detail || 'Could not save.'; return; }
+        this.active.title = this.editTitle.trim();
+        this.active.note = this.editNote.trim();
+        this.active.target_date = this.editTargetDate || null;
+      });
+    },
+    removeActive() {
+      if (!this.active) return;
+      const label = this.active.kind === 'project' ? 'Unpin this project from the map?' : 'Remove this card?';
+      if (!confirm(label)) return;
+      const id = this.active.id;
+      fetch('/map/nodes/' + id, { method: 'DELETE' }).then(r => {
+        if (r.ok) { this.closeDetail(); window.location.reload(); }
+      });
+    },
+  };
+}
+</script>
+
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Map</h1>
+</header>
+
+<main
+  class="px-4 sm:px-6 py-6"
+  x-data='mindMapCanvas({{ nodes | tojson }}, {{ pinnable_projects | tojson }}, {{ kinds | tojson }})'
+  @pointermove.window="onDrag($event)"
+>
+
+  <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+    <p class="text-xs text-stone-500 dark:text-stone-400 max-w-md">Drag cards anywhere to arrange your focus areas. Click a card for details or to edit.</p>
+    <button type="button" @click="openAdd()" class="shrink-0 text-xs px-3 py-1.5 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium">+ Add to map</button>
+  </div>
+
+  <template x-if="nodes.length === 0">
+    <div class="map-canvas rounded-2xl border border-dashed border-stone-300 dark:border-stone-600 px-6 py-16 text-center">
+      <p class="map-font-title text-3xl text-stone-500 dark:text-stone-400">Nothing pinned yet</p>
+      <p class="text-xs text-stone-400 dark:text-stone-500 mt-1">Pin a project, or add a target, hackathon, competition, or research idea.</p>
+    </div>
+  </template>
+
+  <div x-show="nodes.length > 0" x-ref="canvas" class="map-canvas relative w-full rounded-2xl border border-stone-200 dark:border-stone-700 overflow-hidden" style="min-height: 62vh;">
+    <template x-for="node in nodes" :key="node.id">
+      <div
+        class="map-card card-lift absolute w-36 sm:w-44 select-none cursor-grab active:cursor-grabbing rounded-xl border px-3 py-2.5"
+        :class="kindMeta[node.kind].badge"
+        :style="`left: ${node.x}%; top: ${node.y}%; transform: rotate(${rotation(node)}deg); transform-origin: center;`"
+        @pointerdown="startDrag($event, node)"
+        @pointerup="endDrag($event, node)"
+      >
+        <span class="map-pin absolute -top-1.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-rust dark:bg-rust-light border border-white/60 dark:border-stone-900/60"></span>
+        <div class="text-[9px] uppercase tracking-wide font-semibold opacity-80" x-text="kindMeta[node.kind].label"></div>
+        <div class="map-font-title text-xl leading-tight mt-0.5 break-words" x-text="cardTitle(node)"></div>
+        <div class="map-font-hand text-[11px] mt-1 opacity-80 break-words" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" x-text="cardNote(node)"></div>
+        <div x-show="node.target_date" class="map-font-hand text-[10px] mt-1.5 opacity-70" x-text="node.target_date ? ('by ' + node.target_date) : ''"></div>
+      </div>
+    </template>
+  </div>
+
+  <!-- Add-to-map popover -->
+  <div x-show="adding" x-cloak @keydown.escape.window="adding = false" @click.self="adding = false" x-transition.opacity class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm px-4">
+    <div class="w-full max-w-sm rounded-lg bg-white dark:bg-stone-800 shadow-2xl border border-stone-200 dark:border-stone-700 p-4">
+      <div class="font-serif text-base text-stone-900 dark:text-stone-100 mb-3">Add to map</div>
+
+      <div class="flex flex-wrap gap-1.5 mb-3">
+        <template x-for="k in kinds" :key="k">
+          <button type="button" @click="newKind = k"
+            :class="newKind === k ? kindMeta[k].badge : 'bg-stone-50 dark:bg-stone-900 text-stone-500 dark:text-stone-400 border-stone-200 dark:border-stone-700'"
+            class="text-[11px] px-2.5 py-1 rounded-full border" x-text="kindMeta[k].label"></button>
+        </template>
+      </div>
+
+      <template x-if="newKind === 'project'">
+        <div>
+          <select x-model="newProjectId" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+            <option value="">Pick a project&hellip;</option>
+            <template x-for="p in pinnableProjects" :key="p.id">
+              <option :value="p.id" x-text="p.name"></option>
+            </template>
+          </select>
+          <p x-show="pinnableProjects.length === 0" class="text-[11px] text-stone-400 dark:text-stone-500 italic mt-1">All active projects are already pinned.</p>
+        </div>
+      </template>
+
+      <template x-if="newKind !== 'project'">
+        <div class="space-y-2">
+          <input type="text" x-model="newTitle" placeholder="Title" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          <textarea x-model="newNote" placeholder="Note (optional)" rows="2" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-none"></textarea>
+          <input type="date" x-model="newTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+      </template>
+
+      <p x-show="addError" x-text="addError" class="text-[11px] text-red-600 dark:text-red-400 mt-2"></p>
+
+      <div class="flex items-center justify-end gap-2 mt-4">
+        <button type="button" @click="adding = false" class="text-xs px-3 py-1.5 rounded text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">Cancel</button>
+        <button type="button" @click="submitAdd()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium">Pin it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail / edit modal -->
+  <div x-show="active" x-cloak @keydown.escape.window="closeDetail()" @click.self="closeDetail()" x-transition.opacity class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm px-4">
+    <template x-if="active">
+      <div class="w-full max-w-sm rounded-lg bg-white dark:bg-stone-800 shadow-2xl border border-stone-200 dark:border-stone-700 p-4">
+        <div class="flex items-start justify-between gap-2 mb-2">
+          <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border" :class="kindMeta[active.kind].badge" x-text="kindMeta[active.kind].label"></span>
+          <button type="button" @click="closeDetail()" class="text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">&times;</button>
+        </div>
+
+        <template x-if="active.kind === 'project'">
+          <div>
+            <div class="map-font-title text-2xl text-stone-900 dark:text-stone-100" x-text="active.project_name"></div>
+            <p x-show="active.project_current_sprint" class="text-xs text-stone-600 dark:text-stone-300 mt-1" x-text="active.project_current_sprint"></p>
+            <p x-show="!active.project_current_sprint && active.project_description" class="text-xs text-stone-600 dark:text-stone-300 mt-1" x-text="active.project_description"></p>
+            <a :href="'/projects/' + active.project_id" class="inline-block mt-3 text-xs font-medium text-rust dark:text-rust-light hover:underline">Open project &#8599;</a>
+          </div>
+        </template>
+
+        <template x-if="active.kind !== 'project'">
+          <div class="space-y-2">
+            <input type="text" x-model="editTitle" class="w-full font-serif text-base bg-transparent border-b border-stone-200 dark:border-stone-700 px-0 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+            <textarea x-model="editNote" rows="3" placeholder="Note" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-none"></textarea>
+            <input type="date" x-model="editTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+            <p x-show="editError" x-text="editError" class="text-[11px] text-red-600 dark:text-red-400"></p>
+            <button type="button" @click="saveDetail()" :disabled="editSaving" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">
+              <span x-show="!editSaving">Save</span><span x-show="editSaving">Saving&hellip;</span>
+            </button>
+          </div>
+        </template>
+
+        <div class="flex items-center justify-end mt-4 pt-3 border-t border-stone-100 dark:border-stone-700">
+          <button type="button" @click="removeActive()" class="text-[11px] text-stone-400 dark:text-stone-500 hover:text-red-600 dark:hover:text-red-400">
+            <span x-text="active.kind === 'project' ? 'Unpin from map' : 'Delete card'"></span>
+          </button>
+        </div>
+      </div>
+    </template>
+  </div>
+
+</main>
+{% endblock %}

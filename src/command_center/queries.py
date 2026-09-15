@@ -1263,6 +1263,76 @@ def delete_registered_project(project_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+MAP_NODE_KINDS = ("project", "target", "hackathon", "competition", "research")
+
+
+def create_map_node(
+    kind: str, title: str = "", note: str = "", target_date: str | None = None,
+    project_id: int | None = None, x: float = 50.0, y: float = 50.0,
+) -> int:
+    now = datetime.now(TZ).isoformat()
+    with session() as conn:
+        cursor = conn.execute(
+            "INSERT INTO map_nodes (kind, title, note, target_date, project_id, x, y, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, title, note, target_date, project_id, x, y, now),
+        )
+        return cursor.lastrowid
+
+
+def list_map_nodes() -> list[dict[str, Any]]:
+    """Every card on /map, left-joined against registered_projects so a
+    kind='project' card always reflects that project's current name and
+    sprint rather than a stale copy — see map_nodes.project_id."""
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT n.*, p.name AS project_name, p.description AS project_description, "
+            "p.current_sprint AS project_current_sprint, p.active AS project_active "
+            "FROM map_nodes n LEFT JOIN registered_projects p ON n.project_id = p.id "
+            "ORDER BY n.id ASC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def list_pinnable_projects() -> list[dict[str, Any]]:
+    """Active projects not already pinned onto the map — feeds the
+    add-node picker's project dropdown for kind='project'."""
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT * FROM registered_projects WHERE active = 1 AND id NOT IN "
+            "(SELECT project_id FROM map_nodes WHERE project_id IS NOT NULL) "
+            "ORDER BY name ASC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def update_map_node_position(node_id: int, x: float, y: float) -> bool:
+    with session() as conn:
+        cursor = conn.execute("UPDATE map_nodes SET x = ?, y = ? WHERE id = ?", (x, y, node_id))
+        return cursor.rowcount > 0
+
+
+def update_map_node(node_id: int, title: str, note: str, target_date: str | None) -> bool:
+    """Edits a card's own text — restricted to non-project cards
+    (`project_id IS NULL`) since a kind='project' card's title/note
+    always mirrors the linked project instead of storing its own."""
+    with session() as conn:
+        cursor = conn.execute(
+            "UPDATE map_nodes SET title = ?, note = ?, target_date = ? "
+            "WHERE id = ? AND project_id IS NULL",
+            (title, note, target_date, node_id),
+        )
+        return cursor.rowcount > 0
+
+
+def delete_map_node(node_id: int) -> bool:
+    """Removes a card from the map. For kind='project' cards this only
+    unpins it — the underlying registered_projects row is untouched."""
+    with session() as conn:
+        cursor = conn.execute("DELETE FROM map_nodes WHERE id = ?", (node_id,))
+        return cursor.rowcount > 0
+
+
 def create_finance_entry(amount: float, category: str, type_: str, entry_date: str, note: str = "") -> int:
     now = datetime.now(TZ).isoformat()
     with session() as conn:
