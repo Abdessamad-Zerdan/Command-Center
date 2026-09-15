@@ -22,11 +22,52 @@
 
 {% block content %}
 <script>
-function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
+function boardSwitcher(boards, current) {
+  return {
+    boards: boards,
+    current: current,
+    creating: false,
+    newName: '',
+    createBoard() {
+      const name = this.newName.trim();
+      if (!name) return;
+      fetch('/map/boards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }).then(async r => {
+        const data = await r.json().catch(() => ({}));
+        if (r.ok) window.location.href = '/map?board=' + data.id;
+      });
+    },
+    renameCurrent() {
+      const name = window.prompt('Rename board', this.current.name);
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      fetch('/map/boards/' + this.current.id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      }).then(r => { if (r.ok) window.location.reload(); });
+    },
+    deleteCurrent() {
+      if (!window.confirm('Delete "' + this.current.name + '"? Its cards go with it.')) return;
+      fetch('/map/boards/' + this.current.id, { method: 'DELETE' }).then(r => {
+        if (r.ok) window.location.href = '/map';
+      });
+    },
+  };
+}
+
+function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
   return {
     nodes: initialNodes,
     pinnableProjects: pinnableProjects,
     kinds: kinds,
+    boardId: boardId,
+
+    canvasPx: { w: 0, h: 0 },
 
     dragId: null,
     dragStartX: 0, dragStartY: 0,
@@ -35,19 +76,24 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
 
     adding: false,
     newKind: 'target',
-    newTitle: '', newNote: '', newTargetDate: '', newProjectId: '',
+    newTitle: '', newNote: '', newTargetDate: '', newProjectId: '', newLinkedLabelId: '',
     addError: '',
 
     active: null,
-    editTitle: '', editNote: '', editTargetDate: '',
+    editTitle: '', editNote: '', editTargetDate: '', editLinkedLabelId: '',
     editSaving: false, editError: '',
 
     kindMeta: {
+      label: { label: 'Label', badge: 'bg-[#fdf8f0] dark:bg-stone-900/40 text-stone-700 dark:text-stone-200 border-2 border-dashed border-stone-400 dark:border-stone-500' },
       project: { label: 'Project', badge: 'bg-[#faece7] dark:bg-rust-light/10 text-rust dark:text-rust-light border-rust/30 dark:border-rust-light/30' },
       target: { label: 'Target', badge: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700' },
       hackathon: { label: 'Hackathon', badge: 'bg-sky-50 dark:bg-sky-900/20 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-700' },
       competition: { label: 'Competition', badge: 'bg-violet-50 dark:bg-violet-900/20 text-violet-800 dark:text-violet-300 border-violet-300 dark:border-violet-700' },
       research: { label: 'Research', badge: 'bg-stone-100 dark:bg-stone-700 text-stone-600 dark:text-stone-300 border-stone-300 dark:border-stone-600' },
+    },
+
+    get labelOptions() {
+      return this.nodes.filter(n => n.kind === 'label');
     },
 
     cardTitle(node) {
@@ -61,6 +107,61 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
       // Deterministic -3..3deg wobble per card, so it reads as
       // hand-placed instead of re-jittering on every reload.
       return ((node.id * 37) % 7) - 3;
+    },
+
+    updateCanvasSize() {
+      if (!this.$refs.canvas) return;
+      const rect = this.$refs.canvas.getBoundingClientRect();
+      this.canvasPx = { w: rect.width, h: rect.height };
+    },
+
+    // Hand-drawn connector from each card's linked label to itself —
+    // computed in real pixels (not the 0-100 percent space cards use)
+    // so the curve doesn't distort on a non-square canvas, and as a
+    // getter so it stays in sync while a card is mid-drag.
+    get connectorPaths() {
+      if (!this.canvasPx.w || !this.canvasPx.h) return [];
+      const anchorOffsetX = 78; // ~ half a card's width — approximate, not pixel-exact
+      const anchorOffsetY = 12;
+      const toPx = (n) => ({
+        x: (n.x / 100) * this.canvasPx.w + anchorOffsetX,
+        y: (n.y / 100) * this.canvasPx.h + anchorOffsetY,
+      });
+      const labelsById = {};
+      this.nodes.forEach(n => { if (n.kind === 'label') labelsById[n.id] = n; });
+      const paths = [];
+      this.nodes.forEach(n => {
+        if (n.kind === 'label' || !n.linked_label_id) return;
+        const label = labelsById[n.linked_label_id];
+        if (!label) return;
+        const a = toPx(label), b = toPx(n);
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len, ny = dx / len;
+        // Deterministic per-pair wobble (not random) so the curve's
+        // shape doesn't reshuffle itself on every re-render.
+        const wobble = ((label.id * 53 + n.id * 17) % 21) - 10;
+        const cx = (a.x + b.x) / 2 + nx * wobble;
+        const cy = (a.y + b.y) / 2 + ny * wobble;
+        paths.push({ id: label.id + '-' + n.id, d: `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}` });
+      });
+      return paths;
+    },
+
+    // <svg> children need real markup, not Alpine's template x-for —
+    // <template> nested directly inside an <svg> is parsed as foreign
+    // (SVG) content by the browser's HTML parser, not upgraded to a
+    // real HTMLTemplateElement, so Alpine's x-for/:d bindings silently
+    // no-op on it (confirmed live: the cloned <path> exists but its
+    // `d` attribute stays empty). Setting .innerHTML directly on an
+    // SVG-namespaced element parses the string as SVG correctly, so
+    // x-html on a <g> sidesteps the whole problem. Only numbers
+    // (computed path coordinates) ever land in this string — never
+    // user-typed text — so there's no injection risk in using x-html.
+    get connectorMarkup() {
+      return this.connectorPaths
+        .map(p => `<path d="${p.d}" fill="none" stroke-width="2" stroke-linecap="round" marker-end="url(#map-arrow)"></path>`)
+        .join('');
     },
 
     startDrag(event, node) {
@@ -107,12 +208,12 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
     openAdd() {
       this.adding = true;
       this.newKind = this.pinnableProjects.length ? 'project' : 'target';
-      this.newTitle = ''; this.newNote = ''; this.newTargetDate = ''; this.newProjectId = '';
+      this.newTitle = ''; this.newNote = ''; this.newTargetDate = ''; this.newProjectId = ''; this.newLinkedLabelId = '';
       this.addError = '';
     },
     submitAdd() {
       this.addError = '';
-      const payload = { kind: this.newKind, x: 15 + Math.random() * 55, y: 15 + Math.random() * 60 };
+      const payload = { board_id: this.boardId, kind: this.newKind, x: 15 + Math.random() * 55, y: 15 + Math.random() * 60 };
       if (this.newKind === 'project') {
         if (!this.newProjectId) { this.addError = 'Pick a project.'; return; }
         payload.project_id = Number(this.newProjectId);
@@ -120,7 +221,10 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
         if (!this.newTitle.trim()) { this.addError = 'Title is required.'; return; }
         payload.title = this.newTitle.trim();
         payload.note = this.newNote.trim();
-        payload.target_date = this.newTargetDate || null;
+        if (this.newKind !== 'label') {
+          payload.target_date = this.newTargetDate || null;
+          if (this.newLinkedLabelId) payload.linked_label_id = Number(this.newLinkedLabelId);
+        }
       }
       fetch('/map/nodes', {
         method: 'POST',
@@ -138,6 +242,7 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
       this.editTitle = node.kind === 'project' ? '' : node.title;
       this.editNote = node.kind === 'project' ? '' : node.note;
       this.editTargetDate = node.target_date || '';
+      this.editLinkedLabelId = node.linked_label_id || '';
       this.editSaving = false;
       this.editError = '';
     },
@@ -145,17 +250,25 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
     saveDetail() {
       if (!this.active || this.active.kind === 'project') return;
       this.editSaving = true; this.editError = '';
+      const isLabel = this.active.kind === 'label';
+      const linkedLabelId = isLabel ? null : (this.editLinkedLabelId ? Number(this.editLinkedLabelId) : null);
       fetch('/map/nodes/' + this.active.id, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: this.editTitle.trim(), note: this.editNote.trim(), target_date: this.editTargetDate || null }),
+        body: JSON.stringify({
+          title: this.editTitle.trim(),
+          note: this.editNote.trim(),
+          target_date: isLabel ? null : (this.editTargetDate || null),
+          linked_label_id: linkedLabelId,
+        }),
       }).then(async r => {
         this.editSaving = false;
         const data = await r.json().catch(() => ({}));
         if (!r.ok) { this.editError = data.detail || 'Could not save.'; return; }
         this.active.title = this.editTitle.trim();
         this.active.note = this.editNote.trim();
-        this.active.target_date = this.editTargetDate || null;
+        this.active.target_date = isLabel ? null : (this.editTargetDate || null);
+        this.active.linked_label_id = linkedLabelId;
       });
     },
     removeActive() {
@@ -178,9 +291,36 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
 
 <main
   class="px-4 sm:px-6 py-6"
-  x-data='mindMapCanvas({{ nodes | tojson }}, {{ pinnable_projects | tojson }}, {{ kinds | tojson }})'
+  x-data='mindMapCanvas({{ nodes | tojson }}, {{ pinnable_projects | tojson }}, {{ kinds | tojson }}, {{ current_board["id"] }})'
   @pointermove.window="onDrag($event)"
 >
+
+  <div x-data='boardSwitcher({{ boards | tojson }}, {{ current_board | tojson }})' class="flex items-center gap-2 flex-wrap mb-3">
+    <template x-for="b in boards" :key="b.id">
+      <a
+        :href="'/map?board=' + b.id"
+        :class="b.id === current.id ? 'bg-rust text-white dark:bg-rust-light' : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700'"
+        class="text-xs px-3 py-1.5 rounded-full font-medium"
+        x-text="b.name"
+      ></a>
+    </template>
+
+    <button type="button" @click="creating = true; newName = ''" x-show="!creating" class="text-xs px-2.5 py-1.5 rounded-full border border-dashed border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">+ Board</button>
+    <div x-show="creating" x-cloak class="flex items-center gap-1.5">
+      <input type="text" x-model="newName" @keydown.enter="createBoard()" @keydown.escape="creating = false" placeholder="Board name" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-full px-3 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light w-32">
+      <button type="button" @click="createBoard()" class="text-xs px-2.5 py-1.5 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium">Add</button>
+      <button type="button" @click="creating = false" class="text-xs text-stone-400 hover:text-stone-700 dark:hover:text-stone-200">Cancel</button>
+    </div>
+
+    <div class="flex items-center gap-1 ml-1">
+      <button type="button" @click="renameCurrent()" title="Rename board" aria-label="Rename board" class="w-6 h-6 flex items-center justify-center rounded text-stone-400 dark:text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-100 dark:hover:bg-stone-700">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+      </button>
+      <button type="button" @click="deleteCurrent()" title="Delete board" aria-label="Delete board" class="w-6 h-6 flex items-center justify-center rounded text-stone-400 dark:text-stone-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-stone-100 dark:hover:bg-stone-700">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>
+      </button>
+    </div>
+  </div>
 
   <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
     <p class="text-xs text-stone-500 dark:text-stone-400 max-w-md">Drag cards anywhere to arrange your focus areas. Click a card for details or to edit.</p>
@@ -190,24 +330,52 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
   <template x-if="nodes.length === 0">
     <div class="map-canvas rounded-2xl border border-dashed border-stone-300 dark:border-stone-600 px-6 py-16 text-center">
       <p class="map-font-title text-3xl text-stone-500 dark:text-stone-400">Nothing pinned yet</p>
-      <p class="text-xs text-stone-400 dark:text-stone-500 mt-1">Pin a project, or add a target, hackathon, competition, or research idea.</p>
+      <p class="text-xs text-stone-400 dark:text-stone-500 mt-1">Start with a label (e.g. "September"), then pin a project, or add a target, hackathon, competition, or research idea.</p>
     </div>
   </template>
 
-  <div x-show="nodes.length > 0" x-ref="canvas" class="map-canvas relative w-full rounded-2xl border border-stone-200 dark:border-stone-700 overflow-hidden" style="min-height: 62vh;">
+  <div
+    x-show="nodes.length > 0"
+    x-ref="canvas"
+    x-init="updateCanvasSize(); $nextTick(updateCanvasSize)"
+    @resize.window="updateCanvasSize()"
+    class="map-canvas relative w-full rounded-2xl border border-stone-200 dark:border-stone-700 overflow-hidden"
+    style="min-height: 62vh;"
+  >
+    <svg class="absolute inset-0 pointer-events-none" style="width: 100%; height: 100%;">
+      <defs>
+        <marker id="map-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" class="fill-stone-400 dark:fill-stone-500" />
+        </marker>
+      </defs>
+      <g x-html="connectorMarkup" class="stroke-stone-400 dark:stroke-stone-500"></g>
+    </svg>
+
     <template x-for="node in nodes" :key="node.id">
       <div
-        class="map-card card-lift absolute w-36 sm:w-44 select-none cursor-grab active:cursor-grabbing rounded-xl border px-3 py-2.5"
-        :class="kindMeta[node.kind].badge"
+        class="map-card card-lift absolute select-none cursor-grab active:cursor-grabbing rounded-xl px-3 py-2.5"
+        :class="node.kind === 'label' ? kindMeta.label.badge + ' w-auto max-w-xs' : kindMeta[node.kind].badge + ' w-36 sm:w-44 border'"
         :style="`left: ${node.x}%; top: ${node.y}%; transform: rotate(${rotation(node)}deg); transform-origin: center;`"
         @pointerdown="startDrag($event, node)"
         @pointerup="endDrag($event, node)"
       >
         <span class="map-pin absolute -top-1.5 left-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full bg-rust dark:bg-rust-light border border-white/60 dark:border-stone-900/60"></span>
-        <div class="text-[9px] uppercase tracking-wide font-semibold opacity-80" x-text="kindMeta[node.kind].label"></div>
-        <div class="map-font-title text-xl leading-tight mt-0.5 break-words" x-text="cardTitle(node)"></div>
-        <div class="map-font-hand text-[11px] mt-1 opacity-80 break-words" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" x-text="cardNote(node)"></div>
-        <div x-show="node.target_date" class="map-font-hand text-[10px] mt-1.5 opacity-70" x-text="node.target_date ? ('by ' + node.target_date) : ''"></div>
+
+        <template x-if="node.kind === 'label'">
+          <div>
+            <div class="map-font-title text-2xl sm:text-3xl font-bold leading-tight break-words" x-text="node.title"></div>
+            <div x-show="node.note" class="map-font-hand text-xs mt-1 opacity-80 break-words" x-text="node.note"></div>
+          </div>
+        </template>
+
+        <template x-if="node.kind !== 'label'">
+          <div>
+            <div class="text-[9px] uppercase tracking-wide font-semibold opacity-80" x-text="kindMeta[node.kind].label"></div>
+            <div class="map-font-title text-xl leading-tight mt-0.5 break-words" x-text="cardTitle(node)"></div>
+            <div class="map-font-hand text-[11px] mt-1 opacity-80 break-words" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" x-text="cardNote(node)"></div>
+            <div x-show="node.target_date" class="map-font-hand text-[10px] mt-1.5 opacity-70" x-text="node.target_date ? ('by ' + node.target_date) : ''"></div>
+          </div>
+        </template>
       </div>
     </template>
   </div>
@@ -233,15 +401,25 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
               <option :value="p.id" x-text="p.name"></option>
             </template>
           </select>
-          <p x-show="pinnableProjects.length === 0" class="text-[11px] text-stone-400 dark:text-stone-500 italic mt-1">All active projects are already pinned.</p>
+          <p x-show="pinnableProjects.length === 0" class="text-[11px] text-stone-400 dark:text-stone-500 italic mt-1">All active projects are already pinned on this board.</p>
         </div>
       </template>
 
       <template x-if="newKind !== 'project'">
         <div class="space-y-2">
-          <input type="text" x-model="newTitle" placeholder="Title" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          <input type="text" x-model="newTitle" :placeholder="newKind === 'label' ? 'e.g. September' : 'Title'" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
           <textarea x-model="newNote" placeholder="Note (optional)" rows="2" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-none"></textarea>
-          <input type="date" x-model="newTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          <template x-if="newKind !== 'label'">
+            <div class="space-y-2">
+              <input type="date" x-model="newTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+              <select x-show="labelOptions.length > 0" x-model="newLinkedLabelId" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+                <option value="">No label</option>
+                <template x-for="l in labelOptions" :key="l.id">
+                  <option :value="l.id" x-text="'Link to ' + l.title"></option>
+                </template>
+              </select>
+            </div>
+          </template>
         </div>
       </template>
 
@@ -276,7 +454,17 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds) {
           <div class="space-y-2">
             <input type="text" x-model="editTitle" class="w-full font-serif text-base bg-transparent border-b border-stone-200 dark:border-stone-700 px-0 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
             <textarea x-model="editNote" rows="3" placeholder="Note" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-none"></textarea>
-            <input type="date" x-model="editTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+            <template x-if="active.kind !== 'label'">
+              <div class="space-y-2">
+                <input type="date" x-model="editTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+                <select x-show="labelOptions.length > 0" x-model="editLinkedLabelId" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+                  <option value="">No label</option>
+                  <template x-for="l in labelOptions" :key="l.id">
+                    <option :value="l.id" x-text="'Link to ' + l.title"></option>
+                  </template>
+                </select>
+              </div>
+            </template>
             <p x-show="editError" x-text="editError" class="text-[11px] text-red-600 dark:text-red-400"></p>
             <button type="button" @click="saveDetail()" :disabled="editSaving" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">
               <span x-show="!editSaving">Save</span><span x-show="editSaving">Saving&hellip;</span>

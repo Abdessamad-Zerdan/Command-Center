@@ -2,9 +2,10 @@
 
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Iterator
 
-from command_center.config import DB_PATH
+from command_center.config import DB_PATH, TZ
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS briefs (
@@ -173,8 +174,18 @@ CREATE TABLE IF NOT EXISTS registered_projects (
 -- via drag rather than any fixed grid/sort order. x/y are percentages
 -- (0-100) of the canvas, not pixels, so a resized viewport doesn't
 -- need any position migration.
+--
+-- Multiple named boards (e.g. "September", "October") so cards for
+-- different stretches of time don't have to share one crowded canvas.
+CREATE TABLE IF NOT EXISTS map_boards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS map_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    board_id INTEGER NOT NULL REFERENCES map_boards(id),
     kind TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT '',
@@ -183,6 +194,10 @@ CREATE TABLE IF NOT EXISTS map_nodes (
     -- name/sprint rather than storing its own copy, so it can't drift
     -- out of sync with the Projects page. NULL for every other kind.
     project_id INTEGER REFERENCES registered_projects(id),
+    -- Set on a non-label card to draw a hand-drawn connector from a
+    -- kind='label' card (e.g. "September") to this one. NULL for label
+    -- cards themselves — a label never links to another label.
+    linked_label_id INTEGER REFERENCES map_nodes(id),
     x REAL NOT NULL,
     y REAL NOT NULL,
     created_at TEXT NOT NULL
@@ -366,6 +381,15 @@ _MIGRATED_COLUMNS: dict[str, dict[str, str]] = {
         "run_command": "TEXT",
         "app_url": "TEXT",
     },
+    "map_nodes": {
+        # Nullable here (unlike the NOT NULL in SCHEMA's fresh-install
+        # CREATE TABLE) since ALTER TABLE ADD COLUMN can't retroactively
+        # backfill a NOT NULL default for rows that already exist —
+        # _backfill_map_node_boards below fills every row in anyway, so
+        # this only stays NULL between that ALTER and the backfill.
+        "board_id": "INTEGER REFERENCES map_boards(id)",
+        "linked_label_id": "INTEGER REFERENCES map_nodes(id)",
+    },
 }
 
 
@@ -384,7 +408,32 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
 
+def _backfill_map_node_boards(conn: sqlite3.Connection) -> None:
+    """Any map_nodes row predating board_id (or inserted between the
+    ALTER above and this running) gets attached to a default board
+    instead of silently vanishing behind every page's WHERE board_id = ?
+    filter, which no board would ever match."""
+    orphaned = conn.execute("SELECT COUNT(*) AS n FROM map_nodes WHERE board_id IS NULL").fetchone()["n"]
+    if not orphaned:
+        return
+    board = conn.execute("SELECT id FROM map_boards ORDER BY id ASC LIMIT 1").fetchone()
+    if board is None:
+        now = datetime.now(TZ).isoformat()
+        cursor = conn.execute("INSERT INTO map_boards (name, created_at) VALUES (?, ?)", ("Board 1", now))
+        board_id = cursor.lastrowid
+    else:
+        board_id = board["id"]
+    conn.execute("UPDATE map_nodes SET board_id = ? WHERE board_id IS NULL", (board_id,))
+
+
 def init_db() -> None:
     with session() as conn:
         conn.executescript(SCHEMA)
         _migrate_columns(conn)
+        _backfill_map_node_boards(conn)
+        # Deferred out of SCHEMA: on a DB where map_nodes already existed
+        # before board_id did, a CREATE INDEX ... (board_id) inside the
+        # same executescript() as the table's own CREATE TABLE IF NOT
+        # EXISTS would run before _migrate_columns above ever adds the
+        # column, and fail outright.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_map_nodes_board_id ON map_nodes (board_id)")
