@@ -156,9 +156,39 @@ CREATE TABLE IF NOT EXISTS registered_projects (
     sprint_goal TEXT,
     blockers TEXT,
     target_date TEXT,
+    -- Shell command that starts the app (run with cwd=path), e.g.
+    -- "python backend/run.py" — used by the Projects page's Run button.
+    run_command TEXT,
+    -- Where the app opens once running, e.g. "http://127.0.0.1:8010".
+    -- Run checks this first so clicking it twice doesn't spawn a second
+    -- server — it just opens the tab if something's already listening.
+    app_url TEXT,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
+
+-- /map — a freeform "mind map" board: hand-placed cards for projects
+-- (pinned by reference, see project_id), next month's targets,
+-- hackathons, competitions, and research, each positioned by the user
+-- via drag rather than any fixed grid/sort order. x/y are percentages
+-- (0-100) of the canvas, not pixels, so a resized viewport doesn't
+-- need any position migration.
+CREATE TABLE IF NOT EXISTS map_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    target_date TEXT,
+    -- Set only for kind='project': the card mirrors that project's live
+    -- name/sprint rather than storing its own copy, so it can't drift
+    -- out of sync with the Projects page. NULL for every other kind.
+    project_id INTEGER REFERENCES registered_projects(id),
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_map_nodes_project_id ON map_nodes (project_id);
 
 CREATE TABLE IF NOT EXISTS finance_entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -331,6 +361,10 @@ _MIGRATED_COLUMNS: dict[str, dict[str, str]] = {
         "break_duration_sec": "INTEGER",
         "paused_at": "TEXT",
         "resumed_at": "TEXT",
+    },
+    "registered_projects": {
+        "run_command": "TEXT",
+        "app_url": "TEXT",
     },
 }
 
