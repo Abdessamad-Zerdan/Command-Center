@@ -17,6 +17,7 @@ import anthropic
 import httpx
 import openai
 
+from command_center import license_gate
 from command_center.config import (
     ANTHROPIC_API_KEY,
     ANTHROPIC_MODEL,
@@ -108,6 +109,7 @@ def run(raw_items: list[RawItem]) -> list[dict]:
     (lane, source, source_id, title, why_it_matters, suggested_next_step,
     priority, deep_link) — the same shape fixtures.py already inserts.
     """
+    license_gate.require()  # see license_gate.py — a second, independent checkpoint
     if not raw_items:
         return []
 

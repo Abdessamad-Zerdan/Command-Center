@@ -5,6 +5,13 @@ person, running on your own machine (or a small server), reading from
 your own Google account and API keys. No shared backend, no accounts,
 no login. This guide gets a fresh clone running from nothing.
 
+> **This repo is public for portfolio purposes — the app itself won't
+> start without a license key.** Everything below gets a clone ready
+> to run, but the last step will fail with a clear error unless you've
+> been given a `license.key` (or `COMMAND_CENTER_LICENSE_KEY`) by the
+> repo owner. See the License section of [README.md](README.md) and
+> `license_gate.py` before you invest time in the rest of this guide.
+
 There are two ways through this, and you only need one:
 
 - **Manual** (this guide) — edit `.env` and `profile.py` by hand, run
@@ -165,6 +172,7 @@ guide satisfies it on its own.
 
 | What | Where | Required? |
 |---|---|---|
+| A license key (`license.key`) | given to you by the repo owner — see the License section of README.md | **Yes — the app refuses to start without it** |
 | Groq **or** Anthropic **or** Ollama | [console.groq.com](https://console.groq.com) / [console.anthropic.com](https://console.anthropic.com) / local install | Yes (pick one) |
 | A profile (`profile.py`) | copied and edited from `profile_example.py` | Yes |
 | Prompts (`prompts.py`) | copied and edited from `prompts_example.py` | No — falls back to a bare-bones placeholder |
