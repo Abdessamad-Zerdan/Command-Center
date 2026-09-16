@@ -11,6 +11,10 @@ own API keys. No accounts, no shared backend, nothing phones home.
 FastAPI + SQLite + server-rendered Jinja templates, Tailwind and Alpine
 via CDN — no frontend build step.
 
+> **This repo is public to showcase the project — not for reuse.**
+> All rights reserved; see [LICENSE](LICENSE). Cloning it for a look
+> is fine, running your own copy isn't, without asking first.
+
 ## What's in it
 
 - **Brief** (`/brief`) — today's Gmail, Calendar, and Tasks items,
@@ -57,6 +61,13 @@ their own Google login, never touching yours), generate them a
 one-time setup link from **Settings → Invites** on a fresh, empty
 instance. See the "Invites" card in Settings for details; each invite
 is single-use and expires on its own schedule.
+
+## License
+
+All rights reserved — see [LICENSE](LICENSE). This repo is public so
+you can see how it's built, not to hand out a free copy of the app.
+Want to use something from it (a pattern, a snippet, the whole thing)?
+Ask first: zerdanabdessamad@gmail.com.
 
 ## Notes
 
