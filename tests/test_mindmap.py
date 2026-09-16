@@ -280,6 +280,22 @@ def test_nav_includes_map_link(client: TestClient) -> None:
     assert 'href="/map"' in response.text
 
 
+def test_map_page_wires_up_connector_selection_and_unlinking(client: TestClient) -> None:
+    response = client.get("/map")
+
+    assert response.status_code == 200
+    # Each connector renders a fat transparent copy as the click target —
+    # a 3px stroke is too thin to hit — carrying the ids the delegated
+    # handler reads back off the DOM.
+    assert 'data-connector="${p.id}" data-child="${p.childId}"' in response.text
+    assert 'pointer-events="stroke"' in response.text
+    assert '@click="onConnectorClick($event)"' in response.text
+    assert "deleteSelectedConnector()" in response.text
+    # Regression guard: the svg overlay must stay click-through overall,
+    # or it swallows every click meant for the cards underneath it.
+    assert 'class="absolute inset-0 pointer-events-none"' in response.text
+
+
 # --- POST /map/boards ------------------------------------------------------
 
 
