@@ -182,11 +182,18 @@ guide satisfies it on its own.
 
 ## Sharing it with someone else
 
-This app has no login system — reachability is the only gate, and
-each instance is meant for one person. To give a friend their own
-instance (their own data, their own Google login, never touching
-yours):
+**This repo won't get a friend a working instance on its own** — it
+requires a license key to even start (see the banner at the top of
+this guide and the License section of README.md), and cloning it
+doesn't come with one. If you want to actually give someone a working
+copy, add them as a collaborator on a separate, unrestricted private
+repo instead — that one has no key requirement, so the flow below
+(minus step 0) works as written on it.
 
+0. Make sure they're set up on the private, unrestricted repo, not
+   this public one — otherwise everything past `uv sync` in step 3
+   below fails at the license check, with no indication anything about
+   sharing/invites was involved.
 1. On **your own already-running instance**, go to **Settings →
    Invites** and generate a one-time link (it expires on its own
    schedule and can only be used once).

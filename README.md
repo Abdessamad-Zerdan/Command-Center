@@ -59,12 +59,14 @@ connect it.
 
 ## Sharing it with someone else
 
-This app has no login system — reachability is the only gate. If you
-want to run a second, separate instance for a friend (their own data,
-their own Google login, never touching yours), generate them a
-one-time setup link from **Settings → Invites** on a fresh, empty
-instance. See the "Invites" card in Settings for details; each invite
-is single-use and expires on its own schedule.
+This repo requires a license key to run at all (see License below) —
+if you want to give a friend a real, working instance, that's what a
+separate, unrestricted private copy is for: add them as a collaborator
+there instead of pointing them at this repo. The in-app invite system
+(**Settings → Invites**) still exists for bootstrapping a second
+instance's setup wizard (profile + Groq key), but it doesn't bypass
+the license key — an instance started from an invite link still won't
+run without one.
 
 ## License
 
