@@ -19,7 +19,6 @@ from command_center.assistant import ingest as assistant_ingest
 from command_center.assistant.router import router as assistant_router
 from command_center.calendar_view.router import router as calendar_router
 from command_center.finances.router import router as finances_router
-from command_center.fitness.router import router as fitness_router
 from command_center.history.router import router as history_router
 from command_center.mindmap.router import router as mindmap_router
 from command_center.projects.router import router as projects_router
@@ -106,7 +105,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
     pipeline.seed_source_config()  # last_pulled_at seeded to now — no pull-on-startup
     queries.seed_app_settings()  # day-bounds defaults, never clobbers existing values
-    queries.seed_fitness_settings()  # /fitness defaults + starter surplus add-ons
     try:
         assistant_ingest.rebuild_index()  # no-op if data/vision.md is unchanged
     except Exception:
@@ -141,7 +139,6 @@ setup_wizard.register(app)  # remove this line (+ the setup_wizard package) to r
 app.include_router(assistant_router)
 app.include_router(calendar_router)
 app.include_router(finances_router)
-app.include_router(fitness_router)
 app.include_router(history_router)  # before any @app.get("/history/{brief_date}") is registered below
 app.include_router(scheduling_router)
 app.include_router(projects_router)
