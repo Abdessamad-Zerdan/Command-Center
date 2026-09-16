@@ -130,12 +130,12 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
     // A hand-drawn connector from each card's linked label to itself —
     // computed in real pixels (not the 0-100 percent space cards use)
     // so the curve doesn't distort on a non-square canvas, and as a
-    // getter so it stays in sync while a card is mid-drag. Two chained
-    // quadratic segments through jittered midpoints (not one smooth
-    // arc) so it reads as sketched, not ruler-drawn; a label-to-label
-    // link (a sublabel) additionally gets a small hand-drawn loop
-    // flourish at its midpoint and its own color, so hierarchy between
-    // labels reads differently at a glance from a label's membership.
+    // getter so it stays in sync while a card is mid-drag. Every
+    // connector loops partway along its route like an actual pen
+    // doodle (see loopyPath), not a mathematically clean arc; a
+    // label-to-label link (a sublabel) gets its own color so hierarchy
+    // between labels reads differently at a glance from a label's
+    // plain membership.
     get connectorPaths() {
       if (!this.canvasPx.w || !this.canvasPx.h) return [];
       const anchorOffsetX = 78; // ~ half a card's width — approximate, not pixel-exact
@@ -154,39 +154,53 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
         const a = toPx(label), b = toPx(n);
         paths.push({
           id: label.id + '-' + n.id,
-          d: this.sketchyPath(a, b, label.id * 53 + n.id * 17),
+          d: this.loopyPath(a, b, label.id * 53 + n.id * 17),
           isSublabel: n.kind === 'label',
-          loop: n.kind === 'label' ? this.loopFlourish(a, b, label.id * 31 + n.id * 11) : null,
         });
       });
       return paths;
     },
 
-    // Two quadratic segments joined at a shared midpoint (C1-continuous,
-    // so the join doesn't kink) through two independently-jittered
-    // control points, instead of one mathematically-smooth arc — reads
-    // as a wavier, sketched-by-hand stroke. Deterministic per pair (not
-    // Math.random()) so the wobble doesn't reshuffle on every re-render.
-    sketchyPath(a, b, seed) {
+    // A wavy lead-in, a full loop-the-loop partway along (drawn with a
+    // single elliptical-arc command swept the long way around between
+    // two nearby points — reliably closes into a loop regardless of
+    // the line's length or angle, no hand-tuned bezier control points
+    // needed), then a wavy tail into the arrowhead. Deterministic per
+    // pair (seed, not Math.random()) so it doesn't reshuffle on every
+    // re-render; the loop radius scales down on short connectors so it
+    // never dwarfs the line between two nearby cards.
+    loopyPath(a, b, seed) {
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len, ny = dx / len;
-      const w1 = ((seed * 53) % 25) - 12;
-      const w2 = ((seed * 31 + 7) % 19) - 9;
-      const m1x = a.x + dx * 0.33 + nx * w1, m1y = a.y + dy * 0.33 + ny * w1;
-      const m2x = a.x + dx * 0.66 + nx * w2, m2y = a.y + dy * 0.66 + ny * w2;
-      const jx = (m1x + m2x) / 2, jy = (m1y + m2y) / 2;
-      return `M ${a.x} ${a.y} Q ${m1x} ${m1y} ${jx} ${jy} Q ${m2x} ${m2y} ${b.x} ${b.y}`;
-    },
+      const ux = dx / len, uy = dy / len;
+      const nx = -uy, ny = ux;
 
-    // A small irregular loop at a sublabel connector's midpoint — the
-    // "circle a word to show it belongs" doodle, not a geometric curve.
-    loopFlourish(a, b, seed) {
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      const r = 8 + (seed % 4);
-      const squish = 0.6 + ((seed % 5) / 10);
-      const rotate = (seed * 17) % 40 - 20;
-      return { cx: mx, cy: my, rx: r, ry: r * squish, rotate };
+      const loopT = 0.38 + ((seed % 9) / 100);
+      const entry = { x: a.x + dx * loopT, y: a.y + dy * loopT };
+      const leadWobble = ((seed * 53) % 15) - 7;
+      const leadCtrl = {
+        x: a.x + dx * loopT * 0.5 + nx * leadWobble,
+        y: a.y + dy * loopT * 0.5 + ny * leadWobble,
+      };
+
+      const r = Math.min(15, len * 0.13) + (seed % 5);
+      const exitAdvance = r * 0.85;
+      const exit = { x: entry.x + ux * exitAdvance, y: entry.y + uy * exitAdvance };
+      const sweep = seed % 2; // alternates which way the loop turns, per pair
+
+      const tailStart = { x: exit.x, y: exit.y };
+      const tailWobble = ((seed * 31 + 7) % 15) - 7;
+      const tailT = loopT + exitAdvance / len;
+      const tailCtrl = {
+        x: tailStart.x + (b.x - tailStart.x) * 0.5 + nx * tailWobble,
+        y: tailStart.y + (b.y - tailStart.y) * 0.5 + ny * tailWobble,
+      };
+
+      return (
+        `M ${a.x} ${a.y} Q ${leadCtrl.x} ${leadCtrl.y} ${entry.x} ${entry.y} ` +
+        `A ${r} ${r} 0 1 ${sweep} ${exit.x} ${exit.y} ` +
+        `Q ${tailCtrl.x} ${tailCtrl.y} ${b.x} ${b.y}`
+      );
     },
 
     // <svg> children need real markup, not Alpine's template x-for —
@@ -202,12 +216,7 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
     get connectorMarkup() {
       let markup = this.connectorPaths.map(p => {
         const cls = p.isSublabel ? 'stroke-rust dark:stroke-rust-light' : 'stroke-stone-400 dark:stroke-stone-500';
-        let segment = `<path d="${p.d}" fill="none" stroke-width="2" stroke-linecap="round" class="${cls}" marker-end="url(#map-arrow-${p.isSublabel ? 'sub' : 'default'})"></path>`;
-        if (p.loop) {
-          const l = p.loop;
-          segment += `<ellipse cx="${l.cx}" cy="${l.cy}" rx="${l.rx}" ry="${l.ry}" transform="rotate(${l.rotate} ${l.cx} ${l.cy})" fill="none" stroke-width="1.6" class="${cls}"></ellipse>`;
-        }
-        return segment;
+        return `<path d="${p.d}" fill="none" stroke-width="2.25" stroke-linecap="round" class="${cls}" marker-end="url(#map-arrow-${p.isSublabel ? 'sub' : 'default'})"></path>`;
       }).join('');
       if (this.connectingFromId !== null) {
         const f = this.connectFrom, c = this.connectCursor;
@@ -455,11 +464,16 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
   >
     <svg class="absolute inset-0 pointer-events-none" style="width: 100%; height: 100%;">
       <defs>
-        <marker id="map-arrow-default" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-          <path d="M0,0 L6,3 L0,6 Z" class="fill-stone-400 dark:fill-stone-500" />
+        <!-- A bigger, hand-sketched dart (concave back edge, not a
+             clean triangle) with a few short hatch strokes scribbled
+             inside — a filled marker alone reads as printed, not drawn. -->
+        <marker id="map-arrow-default" markerWidth="18" markerHeight="16" refX="14.5" refY="8" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M1,2 L15.5,8 L1,14 L5,8 Z" class="fill-stone-500 dark:fill-stone-400" />
+          <path d="M3,5.5 L10,7.5 M2.5,8.3 L11,8.3 M3,11 L10,8.8" class="stroke-stone-700 dark:stroke-stone-200" stroke-width="0.6" fill="none" stroke-linecap="round" />
         </marker>
-        <marker id="map-arrow-sub" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-          <path d="M0,0 L6,3 L0,6 Z" class="fill-rust dark:fill-rust-light" />
+        <marker id="map-arrow-sub" markerWidth="18" markerHeight="16" refX="14.5" refY="8" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M1,2 L15.5,8 L1,14 L5,8 Z" class="fill-rust dark:fill-rust-light" />
+          <path d="M3,5.5 L10,7.5 M2.5,8.3 L11,8.3 M3,11 L10,8.8" class="stroke-rust-light dark:stroke-rust" stroke-width="0.6" fill="none" stroke-linecap="round" />
         </marker>
       </defs>
       <g x-html="connectorMarkup" class="stroke-stone-400 dark:stroke-stone-500"></g>
