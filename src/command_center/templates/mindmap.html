@@ -82,6 +82,10 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
     connectFrom: { x: 0, y: 0 },
     connectCursor: { x: 0, y: 0 },
 
+    // { id, childId, x, y } for the connector currently clicked — x/y
+    // are canvas pixels, where the little unlink button gets parked.
+    selectedConnector: null,
+
     adding: false,
     newKind: 'target',
     newTitle: '', newNote: '', newTargetDate: '', newProjectId: '', newLinkedLabelId: '',
@@ -154,6 +158,7 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
         const a = toPx(label), b = toPx(n);
         paths.push({
           id: label.id + '-' + n.id,
+          childId: n.id,
           d: this.loopyPath(a, b, label.id * 53 + n.id * 17),
           isSublabel: n.kind === 'label',
         });
@@ -161,43 +166,62 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       return paths;
     },
 
-    // A wavy lead-in, a full loop-the-loop partway along (drawn with a
-    // single elliptical-arc command swept the long way around between
-    // two nearby points — reliably closes into a loop regardless of
-    // the line's length or angle, no hand-tuned bezier control points
-    // needed), then a wavy tail into the arrowhead. Deterministic per
-    // pair (seed, not Math.random()) so it doesn't reshuffle on every
-    // re-render; the loop radius scales down on short connectors so it
-    // never dwarfs the line between two nearby cards.
+    // Shaped after the doodled arrow the user referenced: a hook at the
+    // start, an S-bend, one big loop-the-loop that visibly crosses its
+    // own line, then a long sweeping tail into the arrowhead.
+    //
+    // The loop is a single elliptical-arc command swept the long way
+    // around (large-arc-flag=1) between two points barely apart, which
+    // closes into a real loop at any line length or angle — no per-case
+    // bezier control points to hand-tune. Everything is seeded off the
+    // node id pair rather than Math.random(), so a given connector keeps
+    // the same handwriting instead of redrawing itself every render.
     loopyPath(a, b, seed) {
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.hypot(dx, dy) || 1;
       const ux = dx / len, uy = dy / len;
       const nx = -uy, ny = ux;
+      // The canvas is overflow-hidden, so any waypoint that wanders
+      // outside it gets clipped — and a clipped stretch of line is also
+      // an unclickable one. Every point below is pinned inside instead.
+      const pad = 6;
+      const clamp = (p) => ({
+        x: Math.max(pad, Math.min(this.canvasPx.w - pad, p.x)),
+        y: Math.max(pad, Math.min(this.canvasPx.h - pad, p.y)),
+      });
+      const along = (t, off) => clamp({ x: a.x + dx * t + nx * off, y: a.y + dy * t + ny * off });
 
-      const loopT = 0.38 + ((seed % 9) / 100);
-      const entry = { x: a.x + dx * loopT, y: a.y + dy * loopT };
-      const leadWobble = ((seed * 53) % 15) - 7;
-      const leadCtrl = {
-        x: a.x + dx * loopT * 0.5 + nx * leadWobble,
-        y: a.y + dy * loopT * 0.5 + ny * leadWobble,
-      };
+      // Lead-in: an opening hook that kicks out one way, then an S-bend
+      // back across — the "pen getting going" part of the reference.
+      const side = seed % 2 ? 1 : -1;
+      const hookSize = Math.min(26, len * 0.16) + (seed % 7);
+      const swing = Math.min(30, len * 0.18) + (seed % 9);
 
-      const r = Math.min(15, len * 0.13) + (seed % 5);
-      const exitAdvance = r * 0.85;
-      const exit = { x: entry.x + ux * exitAdvance, y: entry.y + uy * exitAdvance };
-      const sweep = seed % 2; // alternates which way the loop turns, per pair
+      const hook = along(0.06, side * hookSize);
+      const hookCtrl = along(0.005, side * hookSize * 0.75);
+      const bend = along(0.26, -side * swing * 0.5);
+      const bendCtrl = along(0.15, side * swing * 0.35);
 
-      const tailStart = { x: exit.x, y: exit.y };
-      const tailWobble = ((seed * 31 + 7) % 15) - 7;
-      const tailT = loopT + exitAdvance / len;
-      const tailCtrl = {
-        x: tailStart.x + (b.x - tailStart.x) * 0.5 + nx * tailWobble,
-        y: tailStart.y + (b.y - tailStart.y) * 0.5 + ny * tailWobble,
-      };
+      // The loop itself.
+      const loopT = 0.44 + ((seed % 7) / 100);
+      const entry = along(loopT, -side * swing * 0.18);
+      const entryCtrl = along(0.35, -side * swing * 0.85);
+      const r = Math.min(34, len * 0.2) + (seed % 6);
+      const exitAdvance = r * 0.7;
+      const exit = clamp({ x: entry.x + ux * exitAdvance, y: entry.y + uy * exitAdvance });
+      const sweep = side > 0 ? 1 : 0;
+
+      // Tail: one long relaxed sweep out to the arrowhead.
+      const tailWobble = ((seed * 31 + 7) % 21) - 10;
+      const tailCtrl = clamp({
+        x: exit.x + (b.x - exit.x) * 0.55 + nx * tailWobble,
+        y: exit.y + (b.y - exit.y) * 0.55 + ny * tailWobble,
+      });
 
       return (
-        `M ${a.x} ${a.y} Q ${leadCtrl.x} ${leadCtrl.y} ${entry.x} ${entry.y} ` +
+        `M ${a.x} ${a.y} Q ${hookCtrl.x} ${hookCtrl.y} ${hook.x} ${hook.y} ` +
+        `Q ${bendCtrl.x} ${bendCtrl.y} ${bend.x} ${bend.y} ` +
+        `Q ${entryCtrl.x} ${entryCtrl.y} ${entry.x} ${entry.y} ` +
         `A ${r} ${r} 0 1 ${sweep} ${exit.x} ${exit.y} ` +
         `Q ${tailCtrl.x} ${tailCtrl.y} ${b.x} ${b.y}`
       );
@@ -216,7 +240,20 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
     get connectorMarkup() {
       let markup = this.connectorPaths.map(p => {
         const cls = p.isSublabel ? 'stroke-rust dark:stroke-rust-light' : 'stroke-stone-400 dark:stroke-stone-500';
-        return `<path d="${p.d}" fill="none" stroke-width="2.25" stroke-linecap="round" class="${cls}" marker-end="url(#map-arrow-${p.isSublabel ? 'sub' : 'default'})"></path>`;
+        const selected = this.selectedConnector && this.selectedConnector.id === p.id;
+        // A wide translucent halo behind the selected connector, rather
+        // than recoloring the line itself — the sublabel/plain color
+        // difference has to survive being selected.
+        const halo = selected
+          ? `<path d="${p.d}" fill="none" stroke-width="11" stroke-linecap="round" opacity="0.28" class="${cls}"></path>`
+          : '';
+        const line = `<path d="${p.d}" fill="none" stroke-width="${selected ? 3.4 : 3}" stroke-linecap="round" class="${cls}" marker-end="url(#map-arrow-${p.isSublabel ? 'sub' : 'default'})"></path>`;
+        // A fat transparent copy on top purely as a click target — a 3px
+        // stroke is far too thin to reliably hit with a mouse. The <svg>
+        // sets pointer-events:none so it never blocks the cards beneath;
+        // this one path opts itself back in.
+        const hit = `<path d="${p.d}" fill="none" stroke="transparent" stroke-width="18" stroke-linecap="round" pointer-events="stroke" style="cursor:pointer" data-connector="${p.id}" data-child="${p.childId}"></path>`;
+        return halo + line + hit;
       }).join('');
       if (this.connectingFromId !== null) {
         const f = this.connectFrom, c = this.connectCursor;
@@ -225,8 +262,49 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       return markup;
     },
 
+    // Clicking a connector selects it; the unlink button is parked a bit
+    // past the loop (0.6 along the path) rather than at the straight-line
+    // midpoint, which a looping line can wander a long way from.
+    onConnectorClick(event) {
+      const el = event.target.closest && event.target.closest('[data-connector]');
+      if (!el) return;
+      event.stopPropagation();
+      let point = { x: 0, y: 0 };
+      try {
+        point = el.getPointAtLength(el.getTotalLength() * 0.6);
+      } catch (e) { /* non-rendered path — fall back to the origin */ }
+      // Keep the button fully inside the canvas: it's centered on this
+      // point and the canvas is overflow-hidden, so a point near an edge
+      // would leave half a button clipped off.
+      const inset = 18;
+      this.selectedConnector = {
+        id: el.dataset.connector,
+        childId: Number(el.dataset.child),
+        x: Math.max(inset, Math.min(this.canvasPx.w - inset, point.x)),
+        y: Math.max(inset, Math.min(this.canvasPx.h - inset, point.y)),
+      };
+    },
+    clearConnectorSelection() { this.selectedConnector = null; },
+    deleteSelectedConnector() {
+      if (!this.selectedConnector) return;
+      this.setLabelLink(this.selectedConnector.childId, null);
+      this.selectedConnector = null;
+    },
+    onConnectorKeydown(event) {
+      if (!this.selectedConnector) return;
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      const tag = (event.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      event.preventDefault();
+      this.deleteSelectedConnector();
+    },
+
     startDrag(event, node) {
       if (event.button !== undefined && event.button !== 0) return;
+      // A selected connector's button is positioned from where the line
+      // was when it was clicked, so drop the selection rather than let
+      // the button sit somewhere the line no longer runs.
+      this.selectedConnector = null;
       this.dragId = node.id;
       this.moved = false;
       this.dragStartX = event.clientX;
@@ -443,7 +521,7 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
   </div>
 
   <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
-    <p class="text-xs text-stone-500 dark:text-stone-400 max-w-md">Drag cards anywhere to arrange your focus areas. Click a card for details or to edit.</p>
+    <p class="text-xs text-stone-500 dark:text-stone-400 max-w-md">Drag cards to arrange them, or drag a card's pin onto a label to link it. Click a card to edit it, or click an arrow to remove that link.</p>
     <button type="button" @click="openAdd()" class="shrink-0 text-xs px-3 py-1.5 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium">+ Add to map</button>
   </div>
 
@@ -459,21 +537,27 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
     x-ref="canvas"
     x-init="updateCanvasSize(); $nextTick(updateCanvasSize)"
     @resize.window="updateCanvasSize()"
+    @click="clearConnectorSelection()"
+    @keydown.window="onConnectorKeydown($event)"
     class="map-canvas relative w-full rounded-2xl border border-stone-200 dark:border-stone-700 overflow-hidden"
     style="min-height: 62vh;"
   >
-    <svg class="absolute inset-0 pointer-events-none" style="width: 100%; height: 100%;">
+    <svg class="absolute inset-0 pointer-events-none" style="width: 100%; height: 100%;" @click="onConnectorClick($event)">
       <defs>
-        <!-- A bigger, hand-sketched dart (concave back edge, not a
-             clean triangle) with a few short hatch strokes scribbled
-             inside — a filled marker alone reads as printed, not drawn. -->
-        <marker id="map-arrow-default" markerWidth="18" markerHeight="16" refX="14.5" refY="8" orient="auto" markerUnits="userSpaceOnUse">
-          <path d="M1,2 L15.5,8 L1,14 L5,8 Z" class="fill-stone-500 dark:fill-stone-400" />
-          <path d="M3,5.5 L10,7.5 M2.5,8.3 L11,8.3 M3,11 L10,8.8" class="stroke-stone-700 dark:stroke-stone-200" stroke-width="0.6" fill="none" stroke-linecap="round" />
+        <!-- A big hand-sketched dart: long swept-back barbs, a deeply
+             notched rear edge, and scribbled hatching that deliberately
+             overruns the outline (hence overflow="visible"). A plain
+             filled triangle reads as printed clip-art next to a
+             hand-drawn line; this reads as inked in by hand. -->
+        <marker id="map-arrow-default" markerWidth="30" markerHeight="26" refX="28" refY="13" orient="auto" markerUnits="userSpaceOnUse" overflow="visible">
+          <path d="M2,0.5 L28.5,13 L4,25.5 L11,13 Z" class="fill-stone-500 dark:fill-stone-400" stroke-linejoin="round" />
+          <path d="M6,5 L22,12 M5.5,9 L18,12.4 M7,19 L19,14.2 M6,23 L25,14 M12,10.5 L27,12.8 M12.5,15.5 L26,13.6 M9,7 L14,16"
+                class="stroke-stone-700 dark:stroke-stone-200" stroke-width="0.7" fill="none" stroke-linecap="round" opacity="0.75" />
         </marker>
-        <marker id="map-arrow-sub" markerWidth="18" markerHeight="16" refX="14.5" refY="8" orient="auto" markerUnits="userSpaceOnUse">
-          <path d="M1,2 L15.5,8 L1,14 L5,8 Z" class="fill-rust dark:fill-rust-light" />
-          <path d="M3,5.5 L10,7.5 M2.5,8.3 L11,8.3 M3,11 L10,8.8" class="stroke-rust-light dark:stroke-rust" stroke-width="0.6" fill="none" stroke-linecap="round" />
+        <marker id="map-arrow-sub" markerWidth="30" markerHeight="26" refX="28" refY="13" orient="auto" markerUnits="userSpaceOnUse" overflow="visible">
+          <path d="M2,0.5 L28.5,13 L4,25.5 L11,13 Z" class="fill-rust dark:fill-rust-light" stroke-linejoin="round" />
+          <path d="M6,5 L22,12 M5.5,9 L18,12.4 M7,19 L19,14.2 M6,23 L25,14 M12,10.5 L27,12.8 M12.5,15.5 L26,13.6 M9,7 L14,16"
+                class="stroke-[#7d3a26] dark:stroke-[#f0b49b]" stroke-width="0.7" fill="none" stroke-linecap="round" opacity="0.75" />
         </marker>
       </defs>
       <g x-html="connectorMarkup" class="stroke-stone-400 dark:stroke-stone-500"></g>
@@ -512,6 +596,20 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
         </template>
       </div>
     </template>
+
+    <!-- Unlink control for the selected connector, parked on the line.
+         Plain HTML rather than SVG so it gets normal button behaviour
+         (hover, focus, tap target) inside the pointer-events:none svg. -->
+    <button
+      x-show="selectedConnector"
+      x-cloak
+      type="button"
+      @click.stop="deleteSelectedConnector()"
+      :style="`left: ${selectedConnector ? selectedConnector.x : 0}px; top: ${selectedConnector ? selectedConnector.y : 0}px;`"
+      class="absolute z-20 -translate-x-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-white dark:bg-stone-800 border border-rust/60 dark:border-rust-light/60 text-rust dark:text-rust-light shadow-float hover:bg-rust hover:text-white dark:hover:bg-rust-light dark:hover:text-stone-900"
+      title="Remove this link"
+      aria-label="Remove this link"
+    >&times;</button>
   </div>
 
   <!-- Add-to-map popover -->
