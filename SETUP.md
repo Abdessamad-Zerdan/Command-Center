@@ -104,7 +104,22 @@ this step the app still runs, just with placeholder content, and the
 app will keep redirecting you to `/setup` until it's filled in (see
 "Why does it keep sending me to /setup?" below).
 
-## 6. Authenticate with Google
+## 6. Set up your prompts
+
+```bash
+cp src/command_center/prompts_example.py src/command_center/prompts.py
+```
+
+This is what the triage pipeline and the assistant actually run on —
+the instructions that turn a raw email/task into a triaged brief item,
+and how the assistant should behave. `prompts_example.py` (committed)
+is a bare-bones placeholder; `prompts.py` (gitignored, your own) is
+where you write the real thing. Skipping this step doesn't break
+anything — the app falls back to the placeholder — but triage quality
+and assistant behavior will be noticeably worse until you tune your
+own.
+
+## 7. Authenticate with Google
 
 ```bash
 make auth
@@ -119,7 +134,7 @@ Opens a browser for the Google consent flow, then writes
 change `GOOGLE_SCOPES` in `config.py` or the token stops refreshing.
 Skip this if you skipped step 4 — the app runs fine without it.
 
-## 7. Run it
+## 8. Run it
 
 ```bash
 make run
@@ -152,6 +167,7 @@ guide satisfies it on its own.
 |---|---|---|
 | Groq **or** Anthropic **or** Ollama | [console.groq.com](https://console.groq.com) / [console.anthropic.com](https://console.anthropic.com) / local install | Yes (pick one) |
 | A profile (`profile.py`) | copied and edited from `profile_example.py` | Yes |
+| Prompts (`prompts.py`) | copied and edited from `prompts_example.py` | No — falls back to a bare-bones placeholder |
 | Google Cloud project + OAuth client | [console.cloud.google.com](https://console.cloud.google.com) | No — brief shows sample data without it |
 | `credentials.json` | downloaded from the OAuth client above | No — same as above |
 | RapidAPI key for Medium2 + your Medium username | [rapidapi.com](https://rapidapi.com) | No — Reading lane only |
@@ -177,9 +193,9 @@ yours):
 
 ## Notes
 
-- `.env`, `secrets/`, `credentials.json`, `command_center.db`, and
-  `profile.py` are all gitignored — nothing personal or secret gets
-  committed by default.
+- `.env`, `secrets/`, `credentials.json`, `command_center.db`,
+  `profile.py`, and `prompts.py` are all gitignored — nothing personal
+  or secret gets committed by default.
 - This repo also ships `CLAUDE.md` and `prompt.md` at the root, which
   contain the original author's personal notes/context. They're not used
   by the app itself — worth a look before you publish your own fork

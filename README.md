@@ -49,9 +49,11 @@ API keys, Google OAuth, and running it for the first time.
 
 Short version: `uv sync`, fill in `.env` from `.env.example` (Ollama
 works out of the box with no key), copy `profile.py` from
-`profile_example.py` and edit it, `make run`. Google (Gmail/Calendar/
-Tasks) is optional and separate — see SETUP.md step 4 — the brief just
-shows sample data until you connect it.
+`profile_example.py` and edit it, copy `prompts.py` from
+`prompts_example.py` and write your own triage/assistant instructions,
+`make run`. Google (Gmail/Calendar/Tasks) is optional and separate —
+see SETUP.md step 4 — the brief just shows sample data until you
+connect it.
 
 ## Sharing it with someone else
 
@@ -72,8 +74,11 @@ Ask first: zerdanabdessamad@gmail.com.
 ## Notes
 
 - `.env`, `secrets/`, `credentials.json`, `command_center.db`,
-  `profile.py`, `CLAUDE.md`, and `prompt.md` are all gitignored —
-  nothing personal or secret gets committed by default. `CLAUDE.md`/
+  `profile.py`, `prompts.py`, `CLAUDE.md`, and `prompt.md` are all
+  gitignored — nothing personal or secret gets committed by default.
+  `prompts.py` holds the actual tuned triage/assistant prompts;
+  `prompts_example.py` (committed) is a bare-bones placeholder you're
+  meant to replace. `CLAUDE.md`/
   `prompt.md` were the original author's working notes for
   pair-programming with an AI assistant, not used by the app itself —
   if you keep using an AI assistant on your own fork, you may want
