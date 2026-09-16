@@ -170,12 +170,17 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
     // start, an S-bend, one big loop-the-loop that visibly crosses its
     // own line, then a long sweeping tail into the arrowhead.
     //
-    // The loop is a single elliptical-arc command swept the long way
-    // around (large-arc-flag=1) between two points barely apart, which
-    // closes into a real loop at any line length or angle — no per-case
-    // bezier control points to hand-tune. Everything is seeded off the
-    // node id pair rather than Math.random(), so a given connector keeps
-    // the same handwriting instead of redrawing itself every render.
+    // The loop is three chained elliptical-arc commands, ~127° each,
+    // that together sweep ~380° — deliberately just past a full turn,
+    // so the pen spirals back across its own earlier line instead of
+    // stopping just short of a closed circle (which read as a vague
+    // bulge, not a loop) or landing exactly on it (which is invisible —
+    // a closed circle drawn exactly over itself shows no crossing at
+    // all). Each segment gets its own slightly different radius so the
+    // loop isn't one uniform, printed-looking curve. Everything is
+    // seeded off the node id pair rather than Math.random(), so a given
+    // connector keeps the same handwriting instead of redrawing itself
+    // every render.
     loopyPath(a, b, seed) {
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.hypot(dx, dy) || 1;
@@ -202,14 +207,42 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       const bend = along(0.26, -side * swing * 0.5);
       const bendCtrl = along(0.15, side * swing * 0.35);
 
-      // The loop itself.
+      // The loop itself. entry is a point ON the loop circle; e1 is the
+      // radial direction from the loop's center out to entry, e2 is
+      // perpendicular to it (e1 and e2 are an orthonormal frame, so an
+      // ellipse in that frame is a valid rotated SVG ellipse — its
+      // x-axis-rotation is just e1's angle). Parametrized so φ=180°
+      // lands exactly on entry: point(φ) = center + rx·cos(φ)·e1 + ry·sin(φ)·e2.
       const loopT = 0.44 + ((seed % 7) / 100);
       const entry = along(loopT, -side * swing * 0.18);
       const entryCtrl = along(0.35, -side * swing * 0.85);
-      const r = Math.min(34, len * 0.2) + (seed % 6);
-      const exitAdvance = r * 0.7;
-      const exit = clamp({ x: entry.x + ux * exitAdvance, y: entry.y + uy * exitAdvance });
-      const sweep = side > 0 ? 1 : 0;
+
+      const baseR = Math.min(20, len * 0.15) + (seed % 6);
+      const e1 = { x: nx * side, y: ny * side };
+      const e2 = { x: ux, y: uy };
+      const rotationDeg = (Math.atan2(e1.y, e1.x) * 180) / Math.PI;
+      const center = { x: entry.x + e1.x * baseR, y: entry.y + e1.y * baseR };
+      // Not clamped like the other waypoints: an SVG arc's shape is
+      // derived from its start/end points plus rx/ry, so nudging an
+      // endpoint to the canvas edge would distort the ellipse rather
+      // than just move a straight segment. The loop radius is small
+      // (≤26px) relative to the canvas, so it only ever grazes an edge
+      // on an unusually tiny board anyway.
+      const pointAt = (deg, rx, ry) => {
+        const rad = (deg * Math.PI) / 180;
+        const c = Math.cos(rad), s = Math.sin(rad);
+        return {
+          x: center.x + rx * c * e1.x + ry * s * e2.x,
+          y: center.y + rx * c * e1.y + ry * s * e2.y,
+        };
+      };
+      const sweepFlag = side > 0 ? 1 : 0;
+      const segDeg = 127; // three of these ≈ 380° — just past a full turn
+      const radiusAt = (i) => baseR * (0.88 + (((seed >> i) % 5) / 20)); // 0.88–1.08x, per segment
+      const p1 = pointAt(180 + segDeg, radiusAt(1), radiusAt(1) * 0.82);
+      const p2 = pointAt(180 + segDeg * 2, radiusAt(2), radiusAt(2) * 0.82);
+      const exit = pointAt(180 + segDeg * 3, radiusAt(3), radiusAt(3) * 0.82);
+      const arc = (rx, to) => `A ${rx} ${rx * 0.82} ${rotationDeg} 0 ${sweepFlag} ${to.x} ${to.y}`;
 
       // Tail: one long relaxed sweep out to the arrowhead.
       const tailWobble = ((seed * 31 + 7) % 21) - 10;
@@ -222,7 +255,7 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
         `M ${a.x} ${a.y} Q ${hookCtrl.x} ${hookCtrl.y} ${hook.x} ${hook.y} ` +
         `Q ${bendCtrl.x} ${bendCtrl.y} ${bend.x} ${bend.y} ` +
         `Q ${entryCtrl.x} ${entryCtrl.y} ${entry.x} ${entry.y} ` +
-        `A ${r} ${r} 0 1 ${sweep} ${exit.x} ${exit.y} ` +
+        `${arc(radiusAt(1), p1)} ${arc(radiusAt(2), p2)} ${arc(radiusAt(3), exit)} ` +
         `Q ${tailCtrl.x} ${tailCtrl.y} ${b.x} ${b.y}`
       );
     },
