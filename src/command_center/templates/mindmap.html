@@ -170,17 +170,24 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
     // start, an S-bend, one big loop-the-loop that visibly crosses its
     // own line, then a long sweeping tail into the arrowhead.
     //
-    // The loop is three chained elliptical-arc commands, ~127° each,
-    // that together sweep ~380° — deliberately just past a full turn,
-    // so the pen spirals back across its own earlier line instead of
-    // stopping just short of a closed circle (which read as a vague
-    // bulge, not a loop) or landing exactly on it (which is invisible —
-    // a closed circle drawn exactly over itself shows no crossing at
-    // all). Each segment gets its own slightly different radius so the
-    // loop isn't one uniform, printed-looking curve. Everything is
-    // seeded off the node id pair rather than Math.random(), so a given
-    // connector keeps the same handwriting instead of redrawing itself
-    // every render.
+    // The loop sweeps ~380° — deliberately just past a full turn, so
+    // the pen spirals back across its own earlier line instead of
+    // stopping just short of a closed circle (a vague bulge, not a
+    // loop) or landing exactly on it (invisible — a circle drawn
+    // exactly over itself shows no crossing at all). An earlier version
+    // built this from three elliptical-arc commands with a different
+    // radius each, which kinked visibly at every join — an SVG arc's
+    // tangent depends on its own radius, so radius jumping between
+    // commands means the *slope* jumps too, not just the curvature.
+    // This version instead samples many points around a smooth,
+    // continuously-varying radius (a single low-amplitude sine, not a
+    // per-segment step) and threads them with chained quadratic
+    // curves through shared midpoints — the standard technique for a
+    // curve that stays tangent-continuous through every point it
+    // passes near, which is what actually reads as one smooth stroke
+    // instead of a polygon of arcs. Everything is seeded off the node
+    // id pair rather than Math.random(), so a given connector keeps
+    // the same handwriting instead of redrawing itself every render.
     loopyPath(a, b, seed) {
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.hypot(dx, dy) || 1;
@@ -220,29 +227,44 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       const baseR = Math.min(20, len * 0.15) + (seed % 6);
       const e1 = { x: nx * side, y: ny * side };
       const e2 = { x: ux, y: uy };
-      const rotationDeg = (Math.atan2(e1.y, e1.x) * 180) / Math.PI;
       const center = { x: entry.x + e1.x * baseR, y: entry.y + e1.y * baseR };
-      // Not clamped like the other waypoints: an SVG arc's shape is
-      // derived from its start/end points plus rx/ry, so nudging an
-      // endpoint to the canvas edge would distort the ellipse rather
-      // than just move a straight segment. The loop radius is small
-      // (≤26px) relative to the canvas, so it only ever grazes an edge
-      // on an unusually tiny board anyway.
-      const pointAt = (deg, rx, ry) => {
+      // Not clamped like the other waypoints: nudging a loop point to
+      // the canvas edge would visibly dent the curve rather than just
+      // bend a straight segment. The loop radius is small (≤26px)
+      // relative to the canvas, so it only ever grazes an edge on an
+      // unusually tiny board anyway.
+      const pointAt = (deg, r) => {
         const rad = (deg * Math.PI) / 180;
         const c = Math.cos(rad), s = Math.sin(rad);
+        const ry = r * 0.82;
         return {
-          x: center.x + rx * c * e1.x + ry * s * e2.x,
-          y: center.y + rx * c * e1.y + ry * s * e2.y,
+          x: center.x + r * c * e1.x + ry * s * e2.x,
+          y: center.y + r * c * e1.y + ry * s * e2.y,
         };
       };
-      const sweepFlag = side > 0 ? 1 : 0;
-      const segDeg = 127; // three of these ≈ 380° — just past a full turn
-      const radiusAt = (i) => baseR * (0.88 + (((seed >> i) % 5) / 20)); // 0.88–1.08x, per segment
-      const p1 = pointAt(180 + segDeg, radiusAt(1), radiusAt(1) * 0.82);
-      const p2 = pointAt(180 + segDeg * 2, radiusAt(2), radiusAt(2) * 0.82);
-      const exit = pointAt(180 + segDeg * 3, radiusAt(3), radiusAt(3) * 0.82);
-      const arc = (rx, to) => `A ${rx} ${rx * 0.82} ${rotationDeg} 0 ${sweepFlag} ${to.x} ${to.y}`;
+      const totalSweep = 372 + (seed % 16); // just past a full turn
+      const steps = 14;
+      const wobbleAmp = 0.05 + ((seed % 4) / 100); // 0.05–0.08
+      const wobbleCycles = 1 + (seed % 2); // 1 or 2 full cycles
+      const loopPoints = [];
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        // A gentle, continuous radius wobble — an integer number of full
+        // sine cycles over the sweep, so it's exactly 0 (r = baseR) at
+        // t=0, matching `entry`/`center` exactly with no seam at the
+        // join. Enough wobble to not read as a die-stamped circle,
+        // not enough to look uneven or broken.
+        const r = baseR * (1 + wobbleAmp * Math.sin(t * Math.PI * 2 * wobbleCycles));
+        loopPoints.push(pointAt(180 + totalSweep * t, r));
+      }
+      const exit = loopPoints[loopPoints.length - 1];
+      let loopSegment = '';
+      for (let i = 1; i < loopPoints.length - 1; i++) {
+        const midX = (loopPoints[i].x + loopPoints[i + 1].x) / 2;
+        const midY = (loopPoints[i].y + loopPoints[i + 1].y) / 2;
+        loopSegment += ` Q ${loopPoints[i].x} ${loopPoints[i].y} ${midX} ${midY}`;
+      }
+      loopSegment += ` L ${exit.x} ${exit.y}`;
 
       // Tail: one long relaxed sweep out to the arrowhead.
       const tailWobble = ((seed * 31 + 7) % 21) - 10;
@@ -254,9 +276,9 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       return (
         `M ${a.x} ${a.y} Q ${hookCtrl.x} ${hookCtrl.y} ${hook.x} ${hook.y} ` +
         `Q ${bendCtrl.x} ${bendCtrl.y} ${bend.x} ${bend.y} ` +
-        `Q ${entryCtrl.x} ${entryCtrl.y} ${entry.x} ${entry.y} ` +
-        `${arc(radiusAt(1), p1)} ${arc(radiusAt(2), p2)} ${arc(radiusAt(3), exit)} ` +
-        `Q ${tailCtrl.x} ${tailCtrl.y} ${b.x} ${b.y}`
+        `Q ${entryCtrl.x} ${entryCtrl.y} ${entry.x} ${entry.y}` +
+        loopSegment +
+        ` Q ${tailCtrl.x} ${tailCtrl.y} ${b.x} ${b.y}`
       );
     },
 
