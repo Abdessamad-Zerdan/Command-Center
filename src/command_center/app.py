@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-from command_center import auth, calendar_sync, fixtures, notify, nudges, pipeline, queries, setup_wizard, triage_rules
+from command_center import auth, calendar_sync, fixtures, license_gate, notify, nudges, pipeline, queries, setup_wizard, triage_rules
 from command_center.assistant import ingest as assistant_ingest
 from command_center.assistant.router import router as assistant_router
 from command_center.calendar_view.router import router as calendar_router
@@ -102,6 +102,7 @@ def _coordinator_tick() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _scheduler
+    license_gate.require()  # see license_gate.py — refuses to start without a valid key
     init_db()
     pipeline.seed_source_config()  # last_pulled_at seeded to now — no pull-on-startup
     queries.seed_app_settings()  # day-bounds defaults, never clobbers existing values

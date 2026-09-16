@@ -19,7 +19,7 @@ import logging
 import re
 from datetime import datetime
 
-from command_center import auth, queries, triage
+from command_center import auth, license_gate, queries, triage
 from command_center.assistant import retrieval, tools
 from command_center.config import LANES, PROFILE, TZ
 
@@ -229,6 +229,7 @@ def _handle_view_brief(call: dict) -> dict:
 
 
 def answer(question: str, history: list[dict] | None = None) -> dict:
+    license_gate.require()  # see license_gate.py — a third, independent checkpoint
     if not history and _looks_like_brain_dump(question):
         extracted = _extract_tasks(question)
 

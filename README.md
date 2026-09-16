@@ -13,7 +13,9 @@ via CDN — no frontend build step.
 
 > **This repo is public to showcase the project — not for reuse.**
 > All rights reserved; see [LICENSE](LICENSE). Cloning it for a look
-> is fine, running your own copy isn't, without asking first.
+> is fine, running your own copy isn't, without asking first — and
+> the app itself won't start without a license key it doesn't ship
+> with (see `license_gate.py`), so this isn't just a legal ask.
 
 ## What's in it
 
@@ -71,11 +73,17 @@ you can see how it's built, not to hand out a free copy of the app.
 Want to use something from it (a pattern, a snippet, the whole thing)?
 Ask first: zerdanabdessamad@gmail.com.
 
+Enforced in code, not just on paper: the app requires a license key
+(`license.key` at the repo root, or `COMMAND_CENTER_LICENSE_KEY`) to
+actually start — see `license_gate.py`. If you've been given
+permission to run an instance, you'll be given a key too.
+
 ## Notes
 
 - `.env`, `secrets/`, `credentials.json`, `command_center.db`,
-  `profile.py`, `prompts.py`, `CLAUDE.md`, and `prompt.md` are all
-  gitignored — nothing personal or secret gets committed by default.
+  `profile.py`, `prompts.py`, `license.key`, `CLAUDE.md`, and
+  `prompt.md` are all gitignored — nothing personal or secret gets
+  committed by default.
   `prompts.py` holds the actual tuned triage/assistant prompts;
   `prompts_example.py` (committed) is a bare-bones placeholder you're
   meant to replace. `CLAUDE.md`/

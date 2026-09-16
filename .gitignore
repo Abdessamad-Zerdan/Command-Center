@@ -7,6 +7,7 @@ __pycache__/
 *.log
 src/command_center/profile.py
 src/command_center/prompts.py
+license.key
 data/vision.md
 data/documents/
 CLAUDE.md
