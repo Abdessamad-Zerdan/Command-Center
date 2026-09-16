@@ -31,6 +31,13 @@ from command_center.config import (
 )
 from command_center.sources import RawItem
 
+try:
+    from command_center.prompts import TRIAGE_SYSTEM_PROMPT as SYSTEM_PROMPT
+except ImportError:
+    # prompts.py is gitignored (see README) — a fresh clone falls back to
+    # this bare-bones placeholder until you write your own.
+    from command_center.prompts_example import TRIAGE_SYSTEM_PROMPT as SYSTEM_PROMPT
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,19 +48,6 @@ class TriageProviderError(Exception):
 
 
 _OLLAMA_BASE_URL = "http://localhost:11434"
-
-
-SYSTEM_PROMPT = (
-    "You are triaging one person's daily inbox and calendar. Categorize each "
-    "item into exactly one lane: urgent (needs attention today, time-sensitive "
-    "or high-stakes), action_items (something to do, not urgent), meeting_prep "
-    "(a calendar event that benefits from prep), tasks_due (a task/deadline due "
-    "today). Assign priority 1 (highest) to 3 (lowest). Skip items that are "
-    "genuinely noise (newsletters, automated notifications with no action "
-    "needed) by leaving them out of the result. Write why_it_matters and "
-    "suggested_next_step as one short sentence each, in the item's own "
-    "language when it isn't English. Call submit_triage with your result."
-)
 
 TRIAGE_SCHEMA = {
     "type": "object",
