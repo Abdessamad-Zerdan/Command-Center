@@ -2,7 +2,7 @@ from command_center.setup_wizard import validators
 
 
 def test_valid_groq_key_passes() -> None:
-    assert validators.validate_groq_key("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") is None
+    assert validators.validate_groq_key("gsk_FAKEKEYFAKEKEYFAKEKEYFAKEKEYFAKEKEY00") is None
 
 
 def test_empty_groq_key_fails() -> None:

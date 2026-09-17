@@ -214,7 +214,7 @@ def test_finish_marks_invite_used_and_it_cannot_be_reused(
     )
     client.post(
         "/setup/step/7",
-        json={"groq_api_key": "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"},
+        json={"groq_api_key": "gsk_FAKEKEYFAKEKEYFAKEKEYFAKEKEYFAKEKEY00"},
     )
     client.post("/setup/step/8", json={"skip": True})
     client.post("/setup/step/9")

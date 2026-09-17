@@ -119,7 +119,7 @@ def test_groq_step_rejects_bad_format(client: TestClient) -> None:
 def test_groq_step_accepts_valid_format_and_advances(client: TestClient) -> None:
     response = client.post(
         "/setup/step/7",
-        json={"groq_api_key": "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"},
+        json={"groq_api_key": "gsk_FAKEKEYFAKEKEYFAKEKEYFAKEKEYFAKEKEY00"},
     )
     assert response.status_code == 200
     assert response.json()["next_url"] == "/setup/step/8"
@@ -168,7 +168,7 @@ def test_run_tests_reports_groq_pass_and_google_fail(
 
     client.post(
         "/setup/step/7",
-        json={"groq_api_key": "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"},
+        json={"groq_api_key": "gsk_FAKEKEYFAKEKEYFAKEKEYFAKEKEYFAKEKEY00"},
     )
     client.post("/setup/step/8", json={"skip": True})
 
@@ -206,7 +206,7 @@ def test_finish_succeeds_after_groq_passes(
     )
     client.post(
         "/setup/step/7",
-        json={"groq_api_key": "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"},
+        json={"groq_api_key": "gsk_FAKEKEYFAKEKEYFAKEKEYFAKEKEYFAKEKEY00"},
     )
     client.post("/setup/step/8", json={"skip": True})
     client.post("/setup/step/9")
@@ -217,7 +217,7 @@ def test_finish_succeeds_after_groq_passes(
     assert response.json() == {"ok": True, "next_url": "/"}
     assert (tmp_path / "profile.py").exists()
     assert config.PROFILE["name"] == "Ada Lovelace"
-    assert config.GROQ_API_KEY == "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"
+    assert config.GROQ_API_KEY == "gsk_FAKEKEYFAKEKEYFAKEKEYFAKEKEYFAKEKEY00"
 
 
 def test_a_groq_only_finish_does_not_lock_the_wizard_back_out(
@@ -244,7 +244,7 @@ def test_a_groq_only_finish_does_not_lock_the_wizard_back_out(
     )
     client.post(
         "/setup/step/7",
-        json={"groq_api_key": "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"},
+        json={"groq_api_key": "gsk_FAKEKEYFAKEKEYFAKEKEYFAKEKEYFAKEKEY00"},
     )
     client.post("/setup/step/8", json={"skip": True})
     client.post("/setup/step/9")
@@ -278,7 +278,7 @@ def test_finish_degrades_instead_of_500ing_on_a_disk_write_failure(
     )
     client.post(
         "/setup/step/7",
-        json={"groq_api_key": "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"},
+        json={"groq_api_key": "gsk_FAKEKEYFAKEKEYFAKEKEYFAKEKEYFAKEKEY00"},
     )
     client.post("/setup/step/8", json={"skip": True})
     client.post("/setup/step/9")
