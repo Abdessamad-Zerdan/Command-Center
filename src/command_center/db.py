@@ -362,3 +362,9 @@ def init_db() -> None:
         # EXISTS would run before _migrate_columns above ever adds the
         # column, and fail outright.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_map_nodes_board_id ON map_nodes (board_id)")
+        # Same reasoning — due_date is a _MIGRATED_COLUMNS entry on items,
+        # so this index can't live inside the main executescript() above
+        # either, or it fails on any DB that predates that column.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_items_status_due_date ON items (status, due_date)"
+        )

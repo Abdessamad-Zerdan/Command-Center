@@ -20,6 +20,7 @@ suite (and CI) never needs a key.
 """
 
 import hashlib
+import hmac
 import os
 from pathlib import Path
 
@@ -65,7 +66,7 @@ def verify() -> bool:
     key = _read_key()
     if not key:
         return False
-    return hashlib.sha256(key.encode("utf-8")).hexdigest() == _EXPECTED_KEY_HASH
+    return hmac.compare_digest(hashlib.sha256(key.encode("utf-8")).hexdigest(), _EXPECTED_KEY_HASH)
 
 
 def require() -> None:

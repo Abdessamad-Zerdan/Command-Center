@@ -1,9 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
 
+from command_center import app as app_module
 from command_center import auth, db, queries
 from command_center.assistant import ingest as assistant_ingest
 from command_center.config import PROFILE, TZ
@@ -445,6 +447,16 @@ def test_create_item_rejects_empty_title(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+def test_create_item_rejects_malformed_due_date(client: TestClient) -> None:
+    # PATCH /items/{id}/due-date already validated this — POST /items had
+    # no equivalent check, so a bad due_date slipped straight into the DB
+    # instead of a 400.
+    response = client.post(
+        "/items", json={"lane": "urgent", "title": "x", "due_date": "not-a-date"}
+    )
+    assert response.status_code == 400
+
+
 def test_create_manual_item_defaults(client: TestClient) -> None:
     item_id = queries.create_manual_item("2026-08-13", "tasks_due", "Renew passport")
     with db.session() as conn:
@@ -637,3 +649,36 @@ def test_dashboard_wires_up_the_add_to_calendar_button(client: TestClient) -> No
     assert "/add-to-calendar" in response.text
     assert "Add to Calendar" in response.text
     assert "View in Calendar" in response.text
+
+
+def test_position_events_converts_to_app_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Google Calendar can return an event's dateTime with whatever offset
+    # the calendar it was created on used, not necessarily APP_TIMEZONE —
+    # the timeline strip must convert before computing left_pct, not read
+    # the stored offset's hour/minute at face value.
+    fixed_tz = ZoneInfo("America/New_York")
+    monkeypatch.setattr(app_module, "TZ", fixed_tz)
+
+    utc_start = datetime(2026, 9, 22, 14, 0, tzinfo=timezone.utc)
+    utc_end = datetime(2026, 9, 22, 15, 0, tzinfo=timezone.utc)
+    events = [{"start_time": utc_start.isoformat(), "end_time": utc_end.isoformat()}]
+
+    [positioned] = app_module._position_events(events)
+
+    assert positioned["left_pct"] == app_module._timeline_pct(utc_start.astimezone(fixed_tz))
+    assert positioned["left_pct"] != app_module._timeline_pct(utc_start.replace(tzinfo=None))
+
+
+def test_position_events_treats_naive_datetime_as_already_app_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixed_tz = ZoneInfo("America/New_York")
+    monkeypatch.setattr(app_module, "TZ", fixed_tz)
+
+    naive_start = datetime(2026, 9, 22, 9, 0)
+    naive_end = datetime(2026, 9, 22, 10, 0)
+    events = [{"start_time": naive_start.isoformat(), "end_time": naive_end.isoformat()}]
+
+    [positioned] = app_module._position_events(events)
+
+    assert positioned["left_pct"] == app_module._timeline_pct(naive_start.replace(tzinfo=fixed_tz))

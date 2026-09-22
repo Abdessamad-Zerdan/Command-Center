@@ -36,11 +36,15 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ groq_api_key: this.key }),
         })
-          .then(r => r.json())
+          .then(r => { if (!r.ok) throw new Error(); return r.json(); })
           .then(data => {
             this.submitting = false;
             if (data.ok) { window.location.href = data.next_url; }
             else { this.error = (data.errors && data.errors.groq_api_key) || 'Something went wrong.'; }
+          })
+          .catch(() => {
+            this.submitting = false;
+            this.error = 'Something went wrong — check your connection and try again.';
           });
       },
     };

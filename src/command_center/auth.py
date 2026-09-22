@@ -16,6 +16,16 @@ class AuthNotConfigured(Exception):
     """No usable Google credentials on disk yet — caller should fall back."""
 
 
+def _restrict_to_owner(path) -> None:
+    """Token files carry live Gmail/Calendar/Tasks access — restrict to
+    the owner on any OS where chmod means something (a no-op ACL-wise on
+    Windows, but harmless there rather than erroring)."""
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+
+
 def has_valid_credentials() -> bool:
     return GOOGLE_TOKEN_PATH.exists()
 
@@ -35,6 +45,7 @@ def run_installed_app_flow() -> None:
     )
     creds = flow.run_local_server(port=0)
     GOOGLE_TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+    _restrict_to_owner(GOOGLE_TOKEN_PATH)
     print(f"Saved credentials to {GOOGLE_TOKEN_PATH}")
 
 
@@ -55,6 +66,7 @@ def get_google_credentials() -> Credentials:
                 "then run `make auth` again."
             ) from exc
         GOOGLE_TOKEN_PATH.write_text(creds.to_json(), encoding="utf-8")
+        _restrict_to_owner(GOOGLE_TOKEN_PATH)
 
     return creds
 

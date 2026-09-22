@@ -32,12 +32,19 @@
             uploaded_at: new Date().toISOString(),
           });
           input.value = '';
+        }).catch(() => {
+          this.uploading = false;
+          this.error = 'Something went wrong — check your connection and try again.';
         });
       },
       remove(doc) {
         if (!confirm(`Remove '${doc.filename}'? The assistant will forget its contents.`)) return;
+        this.error = '';
         fetch(`/settings/knowledge/${doc.id}`, { method: 'DELETE' }).then(r => {
           if (r.ok) { this.documents = this.documents.filter(d => d.id !== doc.id); }
+          else { this.error = 'Could not remove that document.'; }
+        }).catch(() => {
+          this.error = 'Something went wrong — check your connection and try again.';
         });
       },
     }"

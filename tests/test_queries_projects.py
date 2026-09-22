@@ -96,6 +96,23 @@ def test_delete_registered_project_nulls_linked_items_but_keeps_them(isolated_db
     assert row["project_id"] is None
 
 
+def test_delete_registered_project_removes_pinned_map_cards(isolated_db: None) -> None:
+    project_id = queries.create_registered_project("Foo", "/tmp/foo")
+    board_id = queries.create_map_board("Board 1")
+    other_board_id = queries.create_map_board("Board 2")
+    node_id = queries.create_map_node(board_id, "project", project_id=project_id)
+    other_node_id = queries.create_map_node(other_board_id, "project", project_id=project_id)
+    label_id = queries.create_map_node(board_id, "label", title="September")
+    queries.update_map_node_label_link(node_id, label_id)
+
+    queries.delete_registered_project(project_id)
+
+    assert queries.get_map_node(node_id) is None
+    assert queries.get_map_node(other_node_id) is None
+    # The label itself is untouched — only the dangling link to it is gone.
+    assert queries.get_map_node(label_id) is not None
+
+
 # --- item <-> project linking --------------------------------------------------
 
 

@@ -301,6 +301,38 @@ def test_map_results_clamps_priority() -> None:
     assert result[0]["priority"] == 3
 
 
+def test_map_results_tolerates_missing_why_it_matters_and_next_step() -> None:
+    # JSON-mode providers (Ollama/Groq) have no schema enforcement — a
+    # model that omits a required field shouldn't crash the whole batch
+    # with a bare KeyError, same degrade-gracefully philosophy as every
+    # other malformed-provider-output path in this module.
+    raw = _raw_item()
+    result = triage._map_results(
+        [raw],
+        [
+            {
+                "source": "gmail",
+                "source_id": "m1",
+                "priority": 1,
+                "lane": "urgent",
+            }
+        ],
+    )
+    assert result == [
+        {
+            "lane": "urgent",
+            "source": "gmail",
+            "source_id": "m1",
+            "title": "Test subject",
+            "why_it_matters": "",
+            "suggested_next_step": "",
+            "priority": 1,
+            "deep_link": "https://mail.google.com/x",
+            "due_date": None,
+        }
+    ]
+
+
 class _FakeCompletions:
     def __init__(self, exc: Exception) -> None:
         self._exc = exc

@@ -387,6 +387,17 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
       node.x = Math.max(2, Math.min(72, this.dragOrigX + dxPct));
       node.y = Math.max(2, Math.min(84, this.dragOrigY + dyPct));
     },
+    // A pointer that never reaches pointerup — the OS hands the gesture
+    // to something else (a touch scroll, an alert, switching apps) —
+    // fires pointercancel instead. Without this, dragId/connectingFromId
+    // stays stuck set and the card or connect-line keeps following the
+    // next pointer that moves, since the position/link save in
+    // endDrag/endConnect never runs to clear it either.
+    onPointerCancel(event) {
+      this.dragId = null;
+      this.moved = false;
+      this.connectingFromId = null;
+    },
     endDrag(event, node) {
       if (this.dragId === null) return;
       const wasMoved = this.moved;
@@ -546,6 +557,7 @@ function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
   class="px-4 sm:px-6 py-6"
   x-data='mindMapCanvas({{ nodes | tojson }}, {{ pinnable_projects | tojson }}, {{ kinds | tojson }}, {{ current_board["id"] }})'
   @pointermove.window="onDrag($event)"
+  @pointercancel.window="onPointerCancel($event)"
 >
 
   <div x-data='boardSwitcher({{ boards | tojson }}, {{ current_board | tojson }})' class="flex items-center gap-2 flex-wrap mb-3">

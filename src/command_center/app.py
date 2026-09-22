@@ -156,11 +156,17 @@ def _timeline_pct(dt: datetime) -> float:
     return max(0.0, min(100.0, (minutes_in / window_minutes) * 100))
 
 
+def _to_app_tz(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=TZ)
+    return dt.astimezone(TZ)
+
+
 def _position_events(events: list[dict]) -> list[dict]:
     positioned = []
     for ev in events:
-        start = datetime.fromisoformat(ev["start_time"])
-        end = datetime.fromisoformat(ev["end_time"])
+        start = _to_app_tz(datetime.fromisoformat(ev["start_time"]))
+        end = _to_app_tz(datetime.fromisoformat(ev["end_time"]))
         left = _timeline_pct(start)
         width = max(2.0, _timeline_pct(end) - left)
         positioned.append({**ev, "left_pct": left, "width_pct": width})
@@ -501,6 +507,11 @@ def create_item(payload: ManualItemIn):
     if not payload.title.strip():
         raise HTTPException(status_code=400, detail="Title can't be empty")
     due_date = payload.due_date or None
+    if due_date is not None:
+        try:
+            date.fromisoformat(due_date)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid date: {due_date!r}") from exc
     item_id = queries.create_manual_item(_today(), payload.lane, payload.title.strip(), due_date=due_date)
     return {"id": item_id}
 

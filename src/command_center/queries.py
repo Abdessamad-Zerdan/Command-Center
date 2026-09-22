@@ -1256,9 +1256,24 @@ def delete_registered_project(project_id: int) -> bool:
     """Hard delete. Linked items keep their full history — only
     project_id is cleared, explicitly in application code rather than
     relying on SQLite's ALTER-added-column FK cascade behavior (which
-    is version-dependent for columns added after table creation)."""
+    is version-dependent for columns added after table creation).
+
+    Any map_nodes card pinning this project (possibly on more than one
+    board — see list_pinnable_projects) is deleted outright rather than
+    just having project_id cleared: a kind='project' card has no
+    stand-alone title/note of its own (list_map_nodes fills those in via
+    a live join to registered_projects), so orphaning one would leave a
+    permanently blank card with nothing to unpin it. Same
+    unlink-dependents-first order as delete_map_node, for anything that
+    was pointing at one of those cards as its label parent."""
     with session() as conn:
         conn.execute("UPDATE items SET project_id = NULL WHERE project_id = ?", (project_id,))
+        conn.execute(
+            "UPDATE map_nodes SET linked_label_id = NULL WHERE linked_label_id IN "
+            "(SELECT id FROM map_nodes WHERE project_id = ?)",
+            (project_id,),
+        )
+        conn.execute("DELETE FROM map_nodes WHERE project_id = ?", (project_id,))
         cursor = conn.execute("DELETE FROM registered_projects WHERE id = ?", (project_id,))
         return cursor.rowcount > 0
 

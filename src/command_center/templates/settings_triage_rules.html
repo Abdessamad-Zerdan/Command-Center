@@ -101,7 +101,7 @@
           <div class="min-w-0 text-stone-700 dark:text-stone-300">
             <span x-text="rule.field === 'sender' ? 'Sender' : 'Title'"></span> contains
             <span class="font-medium text-stone-900 dark:text-stone-100" x-text="'‘' + rule.match_value + '’'"></span>
-            &#8594; <span x-text="{{ lane_labels | tojson }}[rule.lane] || rule.lane"></span>
+            &#8594; <span x-text='{{ lane_labels | tojson }}[rule.lane] || rule.lane'></span>
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <label class="flex items-center gap-1">

@@ -1,7 +1,7 @@
 {% extends "setup/_setup_base.html" %}
 {% block title %}Setup — Welcome{% endblock %}
 {% block setup_content %}
-<div x-data="{ submitting: false }">
+<div x-data="{ submitting: false, error: '' }">
   <h1 class="font-serif text-2xl text-stone-900 dark:text-stone-100">Welcome to Daily Command Center</h1>
   <p class="mt-4 text-sm text-stone-600 dark:text-stone-300 leading-relaxed">
     This app pulls your email, calendar, and tasks into one daily brief,
@@ -12,11 +12,14 @@
     :disabled="submitting"
     @click="
       submitting = true;
+      error = '';
       fetch('/setup/step/1', { method: 'POST' })
-        .then(r => r.json())
-        .then(data => { if (data.next_url) window.location.href = data.next_url; });
+        .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+        .then(data => { if (data.next_url) window.location.href = data.next_url; })
+        .catch(() => { submitting = false; error = 'Something went wrong — check your connection and try again.'; });
     "
     class="mt-8 text-sm px-5 py-2.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50"
   >Get started</button>
+  <p x-show="error" x-text="error" class="mt-3 text-xs text-red-600 dark:text-red-400"></p>
 </div>
 {% endblock %}

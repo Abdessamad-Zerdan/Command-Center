@@ -13,6 +13,7 @@
     @click="runTests()"
     class="mt-6 text-sm px-5 py-2.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50"
   ><span x-text="running ? 'Testing…' : 'Run tests'"></span></button>
+  <p x-show="testsError" x-text="testsError" class="mt-2 text-xs text-rust dark:text-rust-light"></p>
 
   <div class="mt-6 space-y-2">
     <template x-for="service in ['groq', 'gmail', 'calendar', 'tasks', 'medium']" :key="service">
@@ -55,27 +56,37 @@
       running: false,
       finishing: false,
       finishError: '',
+      testsError: '',
       get ready() {
         return !!(this.results.groq && this.results.groq.pass === true);
       },
       runTests() {
         this.running = true;
+        this.testsError = '';
         fetch('/setup/step/10', { method: 'POST' })
-          .then(r => r.json())
+          .then(r => { if (!r.ok) throw new Error(); return r.json(); })
           .then(data => {
             this.running = false;
             this.results = data.results;
+          })
+          .catch(() => {
+            this.running = false;
+            this.testsError = 'Something went wrong — check your connection and try again.';
           });
       },
       finish() {
         this.finishing = true;
         this.finishError = '';
         fetch('/setup/finish', { method: 'POST' })
-          .then(r => r.json())
+          .then(r => { if (!r.ok) throw new Error(); return r.json(); })
           .then(data => {
             this.finishing = false;
             if (data.ok) { window.location.href = data.next_url; }
             else { this.finishError = (data.errors && data.errors.finish) || 'Something went wrong.'; }
+          })
+          .catch(() => {
+            this.finishing = false;
+            this.finishError = 'Something went wrong — check your connection and try again.';
           });
       },
     };
