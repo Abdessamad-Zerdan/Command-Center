@@ -501,6 +501,36 @@ def test_confirm_action_confirmed_calls_dispatch_with_correct_args(
     assert rows[0]["status"] == "confirmed"
 
 
+def test_confirm_action_create_calendar_event_fetches_credentials_and_dispatches(
+    isolated_db: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Unlike move_task_to_date, create_calendar_event is a real Google API
+    # call — it must go through the same credentials fetch as create_task,
+    # not the _LOCAL_ONLY_TOOLS shortcut.
+    captured = {}
+
+    def fake_dispatch(name, args, credentials):
+        captured["name"] = name
+        captured["args"] = args
+        captured["credentials"] = credentials
+        return {"id": "evt1", "link": "https://calendar.google.com/evt1"}
+
+    monkeypatch.setattr(tools, "dispatch", fake_dispatch)
+    monkeypatch.setattr(auth, "get_google_credentials", lambda: "fake-creds")
+
+    result = chat.confirm_action(
+        {"tool": "create_calendar_event", "args": {"title": "Standup", "date": "2026-08-21"}},
+        confirmed=True,
+    )
+
+    assert captured["name"] == "create_calendar_event"
+    assert captured["credentials"] == "fake-creds"
+    assert result["answer"] == "Done — scheduled 'Standup' on Friday, Aug 21."
+    with db.session() as conn:
+        rows = conn.execute("SELECT * FROM tool_call_log").fetchall()
+    assert rows[0]["status"] == "confirmed"
+
+
 def test_confirm_action_move_task_to_date_never_requests_google_credentials(
     isolated_db: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -850,7 +880,7 @@ def test_confirm_action_wraps_dispatch_failure_as_plain_text(
 
     result = chat.confirm_action({"tool": "create_task", "args": {"title": "X"}}, confirmed=True)
 
-    assert "Couldn't reach Google Tasks" in result["answer"]
+    assert "Couldn't reach Google" in result["answer"]
     assert "Google API is down" not in result["answer"]  # not a raw exception
     with db.session() as conn:
         rows = conn.execute("SELECT * FROM tool_call_log").fetchall()

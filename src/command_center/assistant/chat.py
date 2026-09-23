@@ -441,7 +441,7 @@ def confirm_action(pending_action: dict, confirmed: bool) -> dict:
         message = (
             "Couldn't make that change — try again in a moment."
             if tool_name in _LOCAL_ONLY_TOOLS
-            else "Couldn't reach Google Tasks — try again in a moment."
+            else "Couldn't reach Google — try again in a moment."
         )
         return {"answer": message, "sources": []}
 

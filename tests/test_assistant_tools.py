@@ -23,12 +23,14 @@ def test_tool_schemas_have_expected_names_and_required_fields() -> None:
         "complete_task",
         "move_task_to_date",
         "view_brief",
+        "create_calendar_event",
     }
     assert by_name["create_task"]["parameters"]["required"] == ["title"]
     assert by_name["update_task"]["parameters"]["required"] == ["task_id"]
     assert by_name["complete_task"]["parameters"]["required"] == ["task_id"]
     assert by_name["move_task_to_date"]["parameters"]["required"] == ["item_id", "target_date"]
     assert by_name["view_brief"]["parameters"]["required"] == ["date"]
+    assert by_name["create_calendar_event"]["parameters"]["required"] == ["title", "date"]
 
 
 def test_create_task_schema_has_lane_and_project_id_fields() -> None:
@@ -367,3 +369,118 @@ def test_describe_done_messages_mention_done_and_relevant_title() -> None:
     assert "Done" in tools.describe_done("update_task", {"task_id": "t1"}, {"t1": "X"})
     result = tools.describe_done("complete_task", {"task_id": "t1"}, {"t1": "Renew SSL cert"})
     assert result == "Done — marked 'Renew SSL cert' as complete."
+
+
+# --- create_calendar_event -----------------------------------------------------
+
+
+def test_validate_args_requires_title_and_date_for_calendar_event() -> None:
+    assert tools.validate_args("create_calendar_event", {}) is not None
+    assert tools.validate_args("create_calendar_event", {"title": "Standup"}) is not None
+    assert tools.validate_args("create_calendar_event", {"date": "2026-08-21"}) is not None
+    assert (
+        tools.validate_args("create_calendar_event", {"title": "Standup", "date": "2026-08-21"}) is None
+    )
+
+
+def test_validate_args_rejects_malformed_calendar_event_date() -> None:
+    assert (
+        tools.validate_args("create_calendar_event", {"title": "Standup", "date": "tomorrow"})
+        is not None
+    )
+
+
+def test_validate_args_rejects_malformed_calendar_event_times() -> None:
+    base = {"title": "Standup", "date": "2026-08-21"}
+    assert tools.validate_args("create_calendar_event", {**base, "start_time": "9am"}) is not None
+    assert tools.validate_args("create_calendar_event", {**base, "end_time": "25:00"}) is not None
+    assert tools.validate_args("create_calendar_event", {**base, "start_time": "09:00"}) is None
+    assert (
+        tools.validate_args(
+            "create_calendar_event", {**base, "start_time": "09:00", "end_time": "10:00"}
+        )
+        is None
+    )
+
+
+def test_event_start_end_all_day_when_no_start_time() -> None:
+    start, end = tools._event_start_end("2026-08-21", None, None)
+    assert start == {"date": "2026-08-21"}
+    assert end == {"date": "2026-08-22"}
+
+
+def test_event_start_end_timed_defaults_one_hour_when_no_end_time() -> None:
+    start, end = tools._event_start_end("2026-08-21", "09:00", None)
+    assert start == {"dateTime": "2026-08-21T09:00:00", "timeZone": str(tools.TZ)}
+    assert end == {"dateTime": "2026-08-21T10:00:00", "timeZone": str(tools.TZ)}
+
+
+def test_event_start_end_timed_uses_explicit_end_time() -> None:
+    start, end = tools._event_start_end("2026-08-21", "09:00", "11:30")
+    assert start["dateTime"] == "2026-08-21T09:00:00"
+    assert end["dateTime"] == "2026-08-21T11:30:00"
+
+
+def test_event_start_end_falls_back_to_one_hour_when_end_before_start() -> None:
+    # A model-produced end_time that's before (or equal to) start_time is
+    # nonsensical, not a real request for a zero/negative-length event —
+    # degrade to the same one-hour default as no end_time at all.
+    start, end = tools._event_start_end("2026-08-21", "10:00", "09:00")
+    assert end["dateTime"] == "2026-08-21T11:00:00"
+
+
+def test_dispatch_create_calendar_event_builds_event_and_returns_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    class FakeCalendarSource:
+        def __init__(self, credentials):
+            calls.append({"credentials": credentials})
+
+        def create_event(self, title, start, end, description=""):
+            calls.append(
+                {"title": title, "start": start, "end": end, "description": description}
+            )
+            return {"id": "evt1", "htmlLink": "https://calendar.google.com/evt1"}
+
+    monkeypatch.setattr(tools, "CalendarSource", FakeCalendarSource)
+
+    result = tools.dispatch(
+        "create_calendar_event",
+        {"title": "Standup", "date": "2026-08-21", "start_time": "09:00", "notes": "daily sync"},
+        credentials="fake-creds",
+    )
+
+    assert result == {"id": "evt1", "link": "https://calendar.google.com/evt1"}
+    assert calls[0] == {"credentials": "fake-creds"}
+    assert calls[1]["title"] == "Standup"
+    assert calls[1]["start"] == {"dateTime": "2026-08-21T09:00:00", "timeZone": str(tools.TZ)}
+    assert calls[1]["description"] == "daily sync"
+
+
+def test_describe_pending_create_calendar_event_shows_title_date_and_time() -> None:
+    text = tools.describe_pending(
+        "create_calendar_event",
+        {"title": "Standup", "date": "2026-08-21", "start_time": "09:00", "end_time": "09:30"},
+        {},
+    )
+    assert "Standup" in text
+    assert "Aug 21" in text
+    assert "09:00" in text
+    assert "09:30" in text
+
+
+def test_describe_pending_create_calendar_event_all_day_has_no_time_clause() -> None:
+    text = tools.describe_pending(
+        "create_calendar_event", {"title": "Standup", "date": "2026-08-21"}, {}
+    )
+    assert "Standup" in text
+    assert ":" not in text.split("on ")[-1]
+
+
+def test_describe_done_create_calendar_event() -> None:
+    text = tools.describe_done(
+        "create_calendar_event", {"title": "Standup", "date": "2026-08-21"}, {}
+    )
+    assert text == "Done — scheduled 'Standup' on Friday, Aug 21."

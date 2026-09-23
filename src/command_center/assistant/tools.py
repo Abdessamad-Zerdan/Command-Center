@@ -6,15 +6,23 @@ threading a real tasklist_id through triage/queries/db, deferred until
 it's actually needed).
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from command_center import queries
-from command_center.config import LANES
+from command_center.config import LANES, TZ
 from command_center.sources import tasks as tasks_module
+from command_center.sources.calendar import CalendarSource
 
 DEFAULT_TASKLIST_ID = "@default"
 
-TOOL_NAMES = {"create_task", "update_task", "complete_task", "move_task_to_date", "view_brief"}
+TOOL_NAMES = {
+    "create_task",
+    "update_task",
+    "complete_task",
+    "move_task_to_date",
+    "view_brief",
+    "create_calendar_event",
+}
 
 TOOL_SCHEMAS = [
     {
@@ -168,6 +176,58 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "create_calendar_event",
+            "description": (
+                "Create a new event on the user's Google Calendar. Use "
+                "only when the user clearly asks to schedule, book, or "
+                "add an event/meeting to their calendar — not for a "
+                "task or to-do (use create_task for those instead)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "The event's title, exactly as the user described it.",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": (
+                            "The event's date in YYYY-MM-DD format. Resolve "
+                            "relative dates ('tomorrow', 'next Friday') against "
+                            "today's date given in context."
+                        ),
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "description": (
+                            "Start time in 24-hour HH:MM format, if the user "
+                            "gave a specific time. Omit entirely for an "
+                            "all-day event."
+                        ),
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": (
+                            "End time in 24-hour HH:MM format. Only set this "
+                            "if the user gave an explicit end time or "
+                            "duration; if they gave a start_time but no end, "
+                            "omit this too — it defaults to one hour after "
+                            "start_time."
+                        ),
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Optional extra detail for the event description. Omit if not mentioned.",
+                    },
+                },
+                "required": ["title", "date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "view_brief",
             "description": (
                 "Navigate the user to the brief for a specific day — "
@@ -268,6 +328,14 @@ def _parses_as_date(value: str) -> bool:
         return False
 
 
+def _parses_as_time(value: str) -> bool:
+    try:
+        datetime.strptime(value, "%H:%M")
+        return True
+    except ValueError:
+        return False
+
+
 def validate_args(name: str, args: dict | None) -> str | None:
     """Returns an error message, or None if args look usable."""
     if name not in TOOL_NAMES:
@@ -294,6 +362,17 @@ def validate_args(name: str, args: dict | None) -> str | None:
             return "view_brief requires a date."
         elif not _parses_as_date(args["date"]):
             return "view_brief's date must be in YYYY-MM-DD format."
+    if name == "create_calendar_event":
+        if _blank(args.get("title")):
+            return "create_calendar_event requires a title."
+        if _blank(args.get("date")):
+            return "create_calendar_event requires a date."
+        elif not _parses_as_date(args["date"]):
+            return "create_calendar_event's date must be in YYYY-MM-DD format."
+        for field in ("start_time", "end_time"):
+            value = args.get(field)
+            if value and not _parses_as_time(value):
+                return f"create_calendar_event's {field} must be in HH:MM (24-hour) format."
     return None
 
 
@@ -321,6 +400,34 @@ def _to_rfc3339_date(date_str: str | None) -> str | None:
     except ValueError:
         return None
     return date.strftime("%Y-%m-%dT00:00:00.000Z")
+
+
+def _event_start_end(date_str: str, start_time: str | None, end_time: str | None) -> tuple[dict, dict]:
+    """Builds the Calendar API's own start/end shape (see
+    CalendarSource.create_event) from create_calendar_event's args — a
+    timed event if start_time was given, defaulting end_time to one hour
+    later when the model didn't set one (or set one that isn't actually
+    after start_time); an all-day event otherwise, with the end date
+    exclusive per Google's own all-day convention (same +1 day fallback
+    calendar_sync.py already uses for a due_date-only item)."""
+    if not start_time:
+        end_date = (datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=1)).date().isoformat()
+        return {"date": date_str}, {"date": end_date}
+
+    start_dt = datetime.strptime(f"{date_str} {start_time}", "%Y-%m-%d %H:%M")
+    end_dt = None
+    if end_time:
+        end_dt = datetime.strptime(f"{date_str} {end_time}", "%Y-%m-%d %H:%M")
+        if end_dt <= start_dt:
+            end_dt = None
+    if end_dt is None:
+        end_dt = start_dt + timedelta(hours=1)
+
+    tz_name = str(TZ)
+    return (
+        {"dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": tz_name},
+        {"dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": tz_name},
+    )
 
 
 def dispatch(name: str, args: dict, credentials) -> dict:
@@ -356,6 +463,12 @@ def dispatch(name: str, args: dict, credentials) -> dict:
             lane=args.get("lane"),
         )
         return {"moved": moved}
+    if name == "create_calendar_event":
+        start, end = _event_start_end(args["date"], args.get("start_time"), args.get("end_time"))
+        event = CalendarSource(credentials).create_event(
+            args["title"], start, end, description=args.get("notes") or ""
+        )
+        return {"id": event.get("id"), "link": event.get("htmlLink", "")}
     raise ValueError(f"Unknown tool: {name!r}")
 
 
@@ -427,6 +540,13 @@ def describe_pending(
         lane_clause = f" to {lane_labels[args['lane']]}" if args.get("lane") in lane_labels else ""
         return f"Move '{title}' to {target}{lane_clause}?"
 
+    if name == "create_calendar_event":
+        when = _format_due_date(args.get("date")) or args.get("date")
+        time_clause = f" at {args['start_time']}" if args.get("start_time") else ""
+        if args.get("start_time") and args.get("end_time"):
+            time_clause += f"–{args['end_time']}"
+        return f"Schedule '{args['title']}' on {when}{time_clause}?"
+
     return "Make this change?"
 
 
@@ -454,5 +574,9 @@ def describe_done(
         title = title_lookup.get(args.get("item_id")) or f"item {args.get('item_id')}"
         target = _format_due_date(args.get("target_date")) or args.get("target_date")
         return f"Done — moved '{title}' to {target}."
+
+    if name == "create_calendar_event":
+        when = _format_due_date(args.get("date")) or args.get("date")
+        return f"Done — scheduled '{args['title']}' on {when}."
 
     return "Done."

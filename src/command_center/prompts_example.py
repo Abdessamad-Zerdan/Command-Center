@@ -21,7 +21,7 @@ ASSISTANT_SYSTEM_PROMPT_TEMPLATE = (
     "instead of guessing.\n\n"
     "TODO: write your own assistant instructions, including how/when to "
     "use the create_task/update_task/complete_task/move_task_to_date/"
-    "view_brief tools available to you. See README.md."
+    "view_brief/create_calendar_event tools available to you. See README.md."
 )
 
 ASSISTANT_EXTRACTION_SYSTEM_PROMPT = (
