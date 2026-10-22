@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Invites{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Invites</h1>
+    <a href="/settings" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to settings</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div
+    x-data="{
+      email: '',
+      expiryDays: 7,
+      error: '',
+      newLink: '',
+      copied: false,
+      invites: {{ invites | tojson }},
+      generate() {
+        this.error = '';
+        this.newLink = '';
+        fetch('/settings/invites', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: this.email, expiry_days: Number(this.expiryDays) }),
+        }).then(async r => {
+          const data = await r.json();
+          if (!r.ok) { this.error = (data.errors && Object.values(data.errors)[0]) || 'Could not create invite.'; return; }
+          this.newLink = window.location.origin + data.invite.link;
+          this.invites.unshift(data.invite);
+          this.email = '';
+        });
+      },
+      copyLink() {
+        navigator.clipboard.writeText(this.newLink);
+        this.copied = true;
+        setTimeout(() => this.copied = false, 1500);
+      }
+    }"
+    class="max-w-2xl space-y-3"
+  >
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3">
+      <div class="font-serif text-base text-stone-900 dark:text-stone-100 mb-2">Generate invite</div>
+      <div class="flex flex-wrap items-center gap-2">
+        <input type="email" x-model="email" placeholder="name@example.com"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 flex-1 min-w-[12rem] focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <input type="number" x-model="expiryDays" min="1" title="Expires in (days)"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 w-20 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <span class="text-xs text-stone-400 dark:text-stone-500">days</span>
+        <button @click="generate()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Generate invite
+        </button>
+      </div>
+      <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-2"></p>
+
+      <div x-show="newLink" class="mt-3 flex items-center gap-2">
+        <input type="text" readonly :value="newLink" @click="$el.select()"
+          class="text-xs bg-stone-50 dark:bg-stone-900 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 flex-1">
+        <button @click="copyLink()" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 whitespace-nowrap">
+          <span x-text="copied ? 'Copied' : 'Copy'"></span>
+        </button>
+      </div>
+    </div>
+
+    <div class="rounded-lg bg-stone-100 dark:bg-stone-800/50 p-4">
+      <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-2">Past invites</div>
+      <template x-if="invites.length === 0">
+        <p class="text-xs text-stone-400 dark:text-stone-500 italic">No invites generated yet.</p>
+      </template>
+      <template x-for="inv in invites" :key="inv.token">
+        <div class="flex items-center justify-between gap-3 py-1.5 border-t border-stone-200 dark:border-stone-700 first:border-t-0 text-xs">
+          <div class="min-w-0">
+            <div class="text-stone-900 dark:text-stone-100 truncate" x-text="inv.email"></div>
+            <div class="text-stone-500 dark:text-stone-400" x-text="'Created ' + inv.created_at.slice(0, 10) + ' · expires ' + inv.expires_at.slice(0, 10)"></div>
+          </div>
+          <span
+            :class="{
+              'text-stone-400 dark:text-stone-500 italic': inv.status === 'used',
+              'text-amber-700 dark:text-amber-400': inv.status === 'expired',
+              'text-stone-700 dark:text-stone-300': inv.status === 'pending',
+            }"
+            x-text="inv.status"
+          ></span>
+        </div>
+      </template>
+    </div>
+
+  </div>
+</main>
+{% endblock %}

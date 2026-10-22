@@ -1,0 +1,867 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Map{% endblock %}
+
+{% block extra_head %}
+{# Caveat + Kalam, self-hosted — no third-party request (static/css/map-fonts.css). #}
+<link rel="stylesheet" href="/static/css/map-fonts.css">
+<style>
+  .map-font-title { font-family: 'Caveat', cursive; }
+  .map-font-hand { font-family: 'Kalam', cursive; }
+  .map-canvas {
+    background-image: radial-gradient(circle, rgba(181, 86, 58, 0.10) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .dark .map-canvas {
+    background-image: radial-gradient(circle, rgba(217, 119, 87, 0.12) 1px, transparent 1px);
+  }
+  .map-card { touch-action: none; }
+  .map-pin { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); }
+</style>
+{% endblock %}
+
+{% block content %}
+<script>
+function boardSwitcher(boards, current) {
+  return {
+    boards: boards,
+    current: current,
+    creating: false,
+    newName: '',
+    createBoard() {
+      const name = this.newName.trim();
+      if (!name) return;
+      fetch('/map/boards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }).then(async r => {
+        const data = await r.json().catch(() => ({}));
+        if (r.ok) window.location.href = '/map?board=' + data.id;
+      });
+    },
+    renameCurrent() {
+      const name = window.prompt('Rename board', this.current.name);
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      fetch('/map/boards/' + this.current.id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed }),
+      }).then(r => { if (r.ok) window.location.reload(); });
+    },
+    deleteCurrent() {
+      if (!window.confirm('Delete "' + this.current.name + '"? Its cards go with it.')) return;
+      fetch('/map/boards/' + this.current.id, { method: 'DELETE' }).then(r => {
+        if (r.ok) window.location.href = '/map';
+      });
+    },
+  };
+}
+
+function mindMapCanvas(initialNodes, pinnableProjects, kinds, boardId) {
+  return {
+    nodes: initialNodes,
+    pinnableProjects: pinnableProjects,
+    kinds: kinds,
+    boardId: boardId,
+
+    canvasPx: { w: 0, h: 0 },
+
+    dragId: null,
+    dragStartX: 0, dragStartY: 0,
+    dragOrigX: 0, dragOrigY: 0,
+    moved: false,
+
+    // Dragging FROM a card's pin dot draws a connector instead of
+    // moving the card — a separate gesture from startDrag/onDrag above,
+    // triggered on the pin dot itself with .stop so it doesn't also
+    // start a move-drag on the parent card.
+    connectingFromId: null,
+    connectFrom: { x: 0, y: 0 },
+    connectCursor: { x: 0, y: 0 },
+
+    // { id, childId, x, y } for the connector currently clicked — x/y
+    // are canvas pixels, where the little unlink button gets parked.
+    selectedConnector: null,
+
+    adding: false,
+    newKind: 'target',
+    newTitle: '', newNote: '', newTargetDate: '', newProjectId: '', newLinkedLabelId: '',
+    addError: '',
+
+    active: null,
+    // A card click opens its breakdown ('view') first — description,
+    // dates, what it stands for, its tasks — and only Edit switches to
+    // the form. Labels are just headings, so they go straight to 'edit'.
+    mode: 'view',
+    detail: null, detailError: '',
+    newTask: '', taskAdding: false, taskError: '',
+    editTitle: '', editNote: '', editTargetDate: '',
+    editSaving: false, editError: '',
+
+    kindMeta: {
+      label: { label: 'Label', badge: 'bg-[#fdf8f0] dark:bg-stone-900/40 text-stone-700 dark:text-stone-200 border-2 border-dashed border-stone-400 dark:border-stone-500' },
+      project: { label: 'Project', badge: 'bg-[#faece7] dark:bg-rust-light/10 text-rust dark:text-rust-light border-rust/30 dark:border-rust-light/30' },
+      target: { label: 'Target', badge: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700' },
+      hackathon: { label: 'Hackathon', badge: 'bg-sky-50 dark:bg-sky-900/20 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-700' },
+      competition: { label: 'Competition', badge: 'bg-violet-50 dark:bg-violet-900/20 text-violet-800 dark:text-violet-300 border-violet-300 dark:border-violet-700' },
+      research: { label: 'Research', badge: 'bg-stone-100 dark:bg-stone-700 text-stone-600 dark:text-stone-300 border-stone-300 dark:border-stone-600' },
+    },
+
+    get labelOptions() {
+      return this.nodes.filter(n => n.kind === 'label');
+    },
+    get activeLabelOptions() {
+      if (!this.active) return this.labelOptions;
+      return this.labelOptions.filter(l => l.id !== this.active.id);
+    },
+
+    cardTitle(node) {
+      return node.kind === 'project' ? node.project_name : node.title;
+    },
+    cardNote(node) {
+      if (node.kind === 'project') return node.project_current_sprint || node.project_description || '';
+      return node.note || '';
+    },
+    rotation(node) {
+      // Deterministic -3..3deg wobble per card, so it reads as
+      // hand-placed instead of re-jittering on every reload.
+      return ((node.id * 37) % 7) - 3;
+    },
+
+    updateCanvasSize() {
+      if (!this.$refs.canvas) return;
+      const rect = this.$refs.canvas.getBoundingClientRect();
+      this.canvasPx = { w: rect.width, h: rect.height };
+    },
+
+    // A hand-drawn connector from each card's linked label to itself —
+    // computed in real pixels (not the 0-100 percent space cards use)
+    // so the curve doesn't distort on a non-square canvas, and as a
+    // getter so it stays in sync while a card is mid-drag. Every
+    // connector loops partway along its route like an actual pen
+    // doodle (see loopyPath), not a mathematically clean arc; a
+    // label-to-label link (a sublabel) gets its own color so hierarchy
+    // between labels reads differently at a glance from a label's
+    // plain membership.
+    get connectorPaths() {
+      if (!this.canvasPx.w || !this.canvasPx.h) return [];
+      const anchorOffsetX = 78; // ~ half a card's width — approximate, not pixel-exact
+      const anchorOffsetY = 12;
+      const toPx = (n) => ({
+        x: (n.x / 100) * this.canvasPx.w + anchorOffsetX,
+        y: (n.y / 100) * this.canvasPx.h + anchorOffsetY,
+      });
+      const labelsById = {};
+      this.nodes.forEach(n => { if (n.kind === 'label') labelsById[n.id] = n; });
+      const paths = [];
+      this.nodes.forEach(n => {
+        if (!n.linked_label_id) return;
+        const label = labelsById[n.linked_label_id];
+        if (!label) return;
+        const a = toPx(label), b = toPx(n);
+        paths.push({
+          id: label.id + '-' + n.id,
+          childId: n.id,
+          d: this.loopyPath(a, b, label.id * 53 + n.id * 17),
+          isSublabel: n.kind === 'label',
+        });
+      });
+      return paths;
+    },
+
+    // Shaped after the doodled arrow the user referenced: a hook at the
+    // start, an S-bend, one big loop-the-loop that visibly crosses its
+    // own line, then a long sweeping tail into the arrowhead.
+    //
+    // The loop sweeps ~380° — deliberately just past a full turn, so
+    // the pen spirals back across its own earlier line instead of
+    // stopping just short of a closed circle (a vague bulge, not a
+    // loop) or landing exactly on it (invisible — a circle drawn
+    // exactly over itself shows no crossing at all). An earlier version
+    // built this from three elliptical-arc commands with a different
+    // radius each, which kinked visibly at every join — an SVG arc's
+    // tangent depends on its own radius, so radius jumping between
+    // commands means the *slope* jumps too, not just the curvature.
+    // This version instead samples many points around a smooth,
+    // continuously-varying radius (a single low-amplitude sine, not a
+    // per-segment step) and threads them with chained quadratic
+    // curves through shared midpoints — the standard technique for a
+    // curve that stays tangent-continuous through every point it
+    // passes near, which is what actually reads as one smooth stroke
+    // instead of a polygon of arcs. Everything is seeded off the node
+    // id pair rather than Math.random(), so a given connector keeps
+    // the same handwriting instead of redrawing itself every render.
+    // The hand-drawn connector (its pen-stroke shape and how it's
+    // generated) is withheld from this public showcase — this placeholder
+    // draws a plain gentle curve between the two cards. See README.md.
+    loopyPath(a, b, seed) {
+      const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const bow = (seed % 2 ? 1 : -1) * 18;
+      const cx = (a.x + b.x) / 2 - ((b.y - a.y) / len) * bow;
+      const cy = (a.y + b.y) / 2 + ((b.x - a.x) / len) * bow;
+      return `M ${a.x} ${a.y} Q ${cx} ${cy} ${b.x} ${b.y}`;
+    },
+
+    // <svg> children need real markup, not Alpine's template x-for —
+    // <template> nested directly inside an <svg> is parsed as foreign
+    // (SVG) content by the browser's HTML parser, not upgraded to a
+    // real HTMLTemplateElement, so Alpine's x-for/:d bindings silently
+    // no-op on it (confirmed live: the cloned <path> exists but its
+    // `d` attribute stays empty). Setting .innerHTML directly on an
+    // SVG-namespaced element parses the string as SVG correctly, so
+    // x-html on a <g> sidesteps the whole problem. Only numbers
+    // (computed path coordinates) ever land in this string — never
+    // user-typed text — so there's no injection risk in using x-html.
+    get connectorMarkup() {
+      let markup = this.connectorPaths.map(p => {
+        const cls = p.isSublabel ? 'stroke-rust dark:stroke-rust-light' : 'stroke-stone-400 dark:stroke-stone-500';
+        const selected = this.selectedConnector && this.selectedConnector.id === p.id;
+        // A wide translucent halo behind the selected connector, rather
+        // than recoloring the line itself — the sublabel/plain color
+        // difference has to survive being selected.
+        const halo = selected
+          ? `<path d="${p.d}" fill="none" stroke-width="11" stroke-linecap="round" opacity="0.28" class="${cls}"></path>`
+          : '';
+        const line = `<path d="${p.d}" fill="none" stroke-width="${selected ? 3.4 : 3}" stroke-linecap="round" class="${cls}" marker-end="url(#map-arrow-${p.isSublabel ? 'sub' : 'default'})"></path>`;
+        // A fat transparent copy on top purely as a click target — a 3px
+        // stroke is far too thin to reliably hit with a mouse. The <svg>
+        // sets pointer-events:none so it never blocks the cards beneath;
+        // this one path opts itself back in.
+        const hit = `<path d="${p.d}" fill="none" stroke="transparent" stroke-width="18" stroke-linecap="round" pointer-events="stroke" style="cursor:pointer" data-connector="${p.id}" data-child="${p.childId}"></path>`;
+        return halo + line + hit;
+      }).join('');
+      if (this.connectingFromId !== null) {
+        const f = this.connectFrom, c = this.connectCursor;
+        markup += `<path d="M ${f.x} ${f.y} L ${c.x} ${c.y}" fill="none" stroke-width="2" stroke-dasharray="5 5" class="stroke-stone-400 dark:stroke-stone-500"></path>`;
+      }
+      return markup;
+    },
+
+    // Clicking a connector selects it; the unlink button is parked a bit
+    // past the loop (0.6 along the path) rather than at the straight-line
+    // midpoint, which a looping line can wander a long way from.
+    onConnectorClick(event) {
+      const el = event.target.closest && event.target.closest('[data-connector]');
+      if (!el) return;
+      event.stopPropagation();
+      let point = { x: 0, y: 0 };
+      try {
+        point = el.getPointAtLength(el.getTotalLength() * 0.6);
+      } catch (e) { /* non-rendered path — fall back to the origin */ }
+      // Keep the button fully inside the canvas: it's centered on this
+      // point and the canvas is overflow-hidden, so a point near an edge
+      // would leave half a button clipped off.
+      const inset = 18;
+      this.selectedConnector = {
+        id: el.dataset.connector,
+        childId: Number(el.dataset.child),
+        x: Math.max(inset, Math.min(this.canvasPx.w - inset, point.x)),
+        y: Math.max(inset, Math.min(this.canvasPx.h - inset, point.y)),
+      };
+    },
+    clearConnectorSelection() { this.selectedConnector = null; },
+    deleteSelectedConnector() {
+      if (!this.selectedConnector) return;
+      this.setLabelLink(this.selectedConnector.childId, null);
+      this.selectedConnector = null;
+    },
+    onConnectorKeydown(event) {
+      if (!this.selectedConnector) return;
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      const tag = (event.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      event.preventDefault();
+      this.deleteSelectedConnector();
+    },
+
+    startDrag(event, node) {
+      if (event.button !== undefined && event.button !== 0) return;
+      // A selected connector's button is positioned from where the line
+      // was when it was clicked, so drop the selection rather than let
+      // the button sit somewhere the line no longer runs.
+      this.selectedConnector = null;
+      this.dragId = node.id;
+      this.moved = false;
+      this.dragStartX = event.clientX;
+      this.dragStartY = event.clientY;
+      this.dragOrigX = node.x;
+      this.dragOrigY = node.y;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    onDrag(event) {
+      // Bound to @pointermove.window — fires on every pointer move
+      // anywhere on the page, so bail immediately unless a card-drag or
+      // a connector-drag is actually in progress, rather than reading
+      // $refs.canvas (and recomputing a rect) on every idle mouse move.
+      if (this.dragId === null && this.connectingFromId === null) return;
+      const canvas = this.$refs.canvas.getBoundingClientRect();
+      if (this.connectingFromId !== null) {
+        this.connectCursor = { x: event.clientX - canvas.left, y: event.clientY - canvas.top };
+      }
+      if (this.dragId === null) return;
+      const dxPct = ((event.clientX - this.dragStartX) / canvas.width) * 100;
+      const dyPct = ((event.clientY - this.dragStartY) / canvas.height) * 100;
+      if (Math.abs(dxPct) > 0.3 || Math.abs(dyPct) > 0.3) this.moved = true;
+      const node = this.nodes.find(n => n.id === this.dragId);
+      if (!node) return;
+      node.x = Math.max(2, Math.min(72, this.dragOrigX + dxPct));
+      node.y = Math.max(2, Math.min(84, this.dragOrigY + dyPct));
+    },
+    // A pointer that never reaches pointerup — the OS hands the gesture
+    // to something else (a touch scroll, an alert, switching apps) —
+    // fires pointercancel instead. Without this, dragId/connectingFromId
+    // stays stuck set and the card or connect-line keeps following the
+    // next pointer that moves, since the position/link save in
+    // endDrag/endConnect never runs to clear it either.
+    onPointerCancel(event) {
+      this.dragId = null;
+      this.moved = false;
+      this.connectingFromId = null;
+    },
+    endDrag(event, node) {
+      if (this.dragId === null) return;
+      const wasMoved = this.moved;
+      const draggedId = this.dragId;
+      this.dragId = null;
+      this.moved = false;
+      if (wasMoved) {
+        const n = this.nodes.find(x => x.id === draggedId);
+        if (n) {
+          fetch('/map/nodes/' + draggedId + '/position', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ x: n.x, y: n.y }),
+          });
+        }
+      } else {
+        this.openDetail(node);
+      }
+    },
+
+    // Drag FROM a card's pin dot to a label (or from a label to any
+    // card) to link them, instead of picking from the "Link to label"
+    // select. Whichever end is the label becomes the parent; if both
+    // ends are labels (a sublabel), the card the drag STARTED from
+    // becomes the child pointing at the one it was dropped on.
+    startConnect(event, node) {
+      if (event.button !== undefined && event.button !== 0) return;
+      this.connectingFromId = node.id;
+      const canvas = this.$refs.canvas.getBoundingClientRect();
+      this.connectFrom = { x: event.clientX - canvas.left, y: event.clientY - canvas.top };
+      this.connectCursor = { ...this.connectFrom };
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    endConnect(event) {
+      if (this.connectingFromId === null) return;
+      const sourceId = this.connectingFromId;
+      this.connectingFromId = null;
+      const dropEl = document.elementFromPoint(event.clientX, event.clientY);
+      const cardEl = dropEl ? dropEl.closest('.map-card') : null;
+      if (!cardEl) return;
+      const targetId = Number(cardEl.dataset.nodeId);
+      if (!targetId || targetId === sourceId) return;
+      this.linkNodes(sourceId, targetId);
+    },
+    linkNodes(sourceId, targetId) {
+      const source = this.nodes.find(n => n.id === sourceId);
+      const target = this.nodes.find(n => n.id === targetId);
+      if (!source || !target) return;
+      let childId, parentId;
+      if (target.kind === 'label') {
+        childId = sourceId; parentId = targetId;
+      } else if (source.kind === 'label') {
+        childId = targetId; parentId = sourceId;
+      } else {
+        return; // neither end is a label — nothing to link
+      }
+      this.setLabelLink(childId, parentId);
+    },
+    setLabelLink(nodeId, linkedLabelId) {
+      const node = this.nodes.find(n => n.id === nodeId);
+      if (!node) return;
+      fetch('/map/nodes/' + nodeId + '/label', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ linked_label_id: linkedLabelId }),
+      }).then(r => {
+        if (r.ok) {
+          node.linked_label_id = linkedLabelId;
+          if (this.active && this.active.id === nodeId) this.active.linked_label_id = linkedLabelId;
+        }
+      });
+    },
+
+    openAdd() {
+      this.adding = true;
+      this.newKind = this.pinnableProjects.length ? 'project' : 'target';
+      this.newTitle = ''; this.newNote = ''; this.newTargetDate = ''; this.newProjectId = ''; this.newLinkedLabelId = '';
+      this.addError = '';
+    },
+    submitAdd() {
+      this.addError = '';
+      const payload = { board_id: this.boardId, kind: this.newKind, x: 15 + Math.random() * 55, y: 15 + Math.random() * 60 };
+      if (this.newKind === 'project') {
+        if (!this.newProjectId) { this.addError = 'Pick a project.'; return; }
+        payload.project_id = Number(this.newProjectId);
+      } else {
+        if (!this.newTitle.trim()) { this.addError = 'Title is required.'; return; }
+        payload.title = this.newTitle.trim();
+        payload.note = this.newNote.trim();
+        if (this.newKind !== 'label') payload.target_date = this.newTargetDate || null;
+      }
+      if (this.newLinkedLabelId) payload.linked_label_id = Number(this.newLinkedLabelId);
+      fetch('/map/nodes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).then(async r => {
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { this.addError = data.detail || 'Could not add that card.'; return; }
+        window.location.reload();
+      });
+    },
+
+    // ?card=ID (and &edit=1) — how a card's own page, or anything else,
+    // links straight to one card's popup on the map.
+    openFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const cardId = parseInt(params.get('card'), 10);
+      if (!cardId) return;
+      const node = this.nodes.find(n => n.id === cardId);
+      const wantsEdit = params.get('edit') === '1';
+      params.delete('card'); params.delete('edit');
+      history.replaceState(null, '', window.location.pathname + (params.toString() ? '?' + params : ''));
+      if (!node) return;
+      this.openDetail(node);
+      if (wantsEdit && node.kind !== 'project') this.mode = 'edit';
+    },
+    openDetail(node) {
+      this.active = node;
+      this.mode = node.kind === 'label' ? 'edit' : 'view';
+      this.detail = null; this.detailError = '';
+      this.newTask = ''; this.taskAdding = false; this.taskError = '';
+      this.editTitle = node.kind === 'project' ? '' : node.title;
+      this.editNote = node.kind === 'project' ? '' : node.note;
+      this.editTargetDate = node.target_date || '';
+      this.editSaving = false;
+      this.editError = '';
+      if (node.kind !== 'label') this.loadDetail(node.id);
+    },
+    loadDetail(nodeId) {
+      fetch('/map/nodes/' + nodeId + '/detail')
+        .then(async r => {
+          const data = await r.json().catch(() => ({}));
+          if (!this.active || this.active.id !== nodeId) return; // closed or switched meanwhile
+          if (!r.ok) { this.detailError = data.detail || 'Could not load this card.'; return; }
+          this.detail = data;
+        })
+        .catch(() => { if (this.active && this.active.id === nodeId) this.detailError = 'Could not reach the server.'; });
+    },
+    get detailOpenTasks() { return this.detail ? this.detail.tasks.filter(t => t.status === 'pending') : []; },
+    get detailDoneTasks() { return this.detail ? this.detail.tasks.filter(t => t.status === 'done') : []; },
+    get detailOtherTasks() { return this.detail ? this.detail.tasks.filter(t => t.status !== 'pending' && t.status !== 'done') : []; },
+    daysLeft(dateStr) {
+      if (!dateStr) return '';
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const d = Math.round((new Date(dateStr.slice(0, 10) + 'T00:00:00') - today) / 86400000);
+      if (d < 0) return 'passed';
+      if (d === 0) return 'today';
+      return 'in ' + d + ' day' + (d === 1 ? '' : 's');
+    },
+    addDetailTask() {
+      const title = this.newTask.trim();
+      if (!title || !this.detail || this.taskAdding) return;
+      this.taskAdding = true; this.taskError = '';
+      const node = this.active;
+      fetch(this.detail.add_task_url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      }).then(async r => {
+        this.taskAdding = false;
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { this.taskError = data.detail || 'Could not add that task.'; return; }
+        if (this.detail) this.detail.tasks.unshift(data);
+        if (node) node.open_tasks = (node.open_tasks || 0) + 1;
+        this.newTask = '';
+      }).catch(() => { this.taskAdding = false; this.taskError = 'Could not reach the server.'; });
+    },
+    toggleDetailTask(task) {
+      const next = task.status === 'done' ? 'pending' : 'done';
+      const node = this.active;
+      fetch('/items/' + task.id + '/' + (next === 'done' ? 'done' : 'reopen'), { method: 'POST' })
+        .then(r => {
+          if (!r.ok) return;
+          const wasPending = task.status === 'pending';
+          task.status = next;
+          if (!node) return;
+          if (next === 'done') {
+            node.done_tasks = (node.done_tasks || 0) + 1;
+            if (wasPending) node.open_tasks = Math.max(0, (node.open_tasks || 0) - 1);
+          } else {
+            node.done_tasks = Math.max(0, (node.done_tasks || 0) - 1);
+            node.open_tasks = (node.open_tasks || 0) + 1;
+          }
+        });
+    },
+    closeDetail() { this.active = null; this.detail = null; },
+    // Own-text fields (title/note/date) and the label link save
+    // independently: the link works on every kind including
+    // kind='project', whose title/note/date stay locked to the
+    // project it mirrors (see update_map_node_label_link's docstring).
+    saveDetail() {
+      if (!this.active || this.active.kind === 'project') return;
+      this.editSaving = true; this.editError = '';
+      const isLabel = this.active.kind === 'label';
+      fetch('/map/nodes/' + this.active.id, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: this.editTitle.trim(),
+          note: this.editNote.trim(),
+          target_date: isLabel ? null : (this.editTargetDate || null),
+        }),
+      }).then(async r => {
+        this.editSaving = false;
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { this.editError = data.detail || 'Could not save.'; return; }
+        this.active.title = this.editTitle.trim();
+        this.active.note = this.editNote.trim();
+        this.active.target_date = isLabel ? null : (this.editTargetDate || null);
+        if (!isLabel) { this.mode = 'view'; this.loadDetail(this.active.id); }
+      });
+    },
+    removeActive() {
+      if (!this.active) return;
+      const label = this.active.kind === 'project' ? 'Unpin this project from the map?' : 'Remove this card?';
+      if (!confirm(label)) return;
+      const id = this.active.id;
+      fetch('/map/nodes/' + id, { method: 'DELETE' }).then(r => {
+        if (r.ok) { this.closeDetail(); window.location.reload(); }
+      });
+    },
+  };
+}
+</script>
+
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Map</h1>
+</header>
+{% include "partials/pursuits_tabs.html" %}
+
+<main
+  class="px-4 sm:px-6 py-6"
+  x-data='mindMapCanvas({{ nodes | tojson }}, {{ pinnable_projects | tojson }}, {{ kinds | tojson }}, {{ current_board["id"] }})'
+  @pointermove.window="onDrag($event)"
+  @pointercancel.window="onPointerCancel($event)"
+>
+
+  <div x-data='boardSwitcher({{ boards | tojson }}, {{ current_board | tojson }})' class="flex items-center gap-2 flex-wrap mb-3">
+    <template x-for="b in boards" :key="b.id">
+      <a
+        :href="'/map?board=' + b.id"
+        :class="b.id === current.id ? 'bg-rust text-white dark:bg-rust-light' : 'bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700'"
+        class="text-xs px-3 py-1.5 rounded-full font-medium"
+        x-text="b.name"
+      ></a>
+    </template>
+
+    <button type="button" @click="creating = true; newName = ''" x-show="!creating" class="text-xs px-2.5 py-1.5 rounded-full border border-dashed border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">+ Board</button>
+    <div x-show="creating" x-cloak class="flex items-center gap-1.5">
+      <input type="text" x-model="newName" @keydown.enter="createBoard()" @keydown.escape="creating = false" placeholder="Board name" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-full px-3 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light w-32">
+      <button type="button" @click="createBoard()" class="text-xs px-2.5 py-1.5 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium">Add</button>
+      <button type="button" @click="creating = false" class="text-xs text-stone-400 hover:text-stone-700 dark:hover:text-stone-200">Cancel</button>
+    </div>
+
+    <div class="flex items-center gap-1 ml-1">
+      <button type="button" @click="renameCurrent()" title="Rename board" aria-label="Rename board" class="w-6 h-6 flex items-center justify-center rounded text-stone-400 dark:text-stone-500 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-100 dark:hover:bg-stone-700">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+      </button>
+      <button type="button" @click="deleteCurrent()" title="Delete board" aria-label="Delete board" class="w-6 h-6 flex items-center justify-center rounded text-stone-400 dark:text-stone-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-stone-100 dark:hover:bg-stone-700">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2L4 6"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="flex items-center justify-between gap-3 mb-4 flex-wrap">
+    <p class="text-xs text-stone-500 dark:text-stone-400 max-w-md">Drag cards to arrange them, or drag a card's pin onto a label to link it. Click a card to see its breakdown and tasks, or click an arrow to remove that link.</p>
+    <button type="button" @click="openAdd()" class="shrink-0 text-xs px-3 py-1.5 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium">+ Add to map</button>
+  </div>
+
+  <template x-if="nodes.length === 0">
+    <div class="map-canvas rounded-2xl border border-dashed border-stone-300 dark:border-stone-600 px-6 py-16 text-center">
+      <p class="map-font-title text-3xl text-stone-500 dark:text-stone-400">Nothing pinned yet</p>
+      <p class="text-xs text-stone-400 dark:text-stone-500 mt-1">Start with a label (e.g. "September"), then pin a project, or add a target, hackathon, competition, or research idea.</p>
+    </div>
+  </template>
+
+  <div
+    x-show="nodes.length > 0"
+    x-ref="canvas"
+    x-init="updateCanvasSize(); $nextTick(() => { updateCanvasSize(); openFromUrl(); })"
+    @resize.window="updateCanvasSize()"
+    @click="clearConnectorSelection()"
+    @keydown.window="onConnectorKeydown($event)"
+    class="map-canvas relative w-full rounded-2xl border border-stone-200 dark:border-stone-700 overflow-hidden"
+    style="min-height: 62vh;"
+  >
+    <svg class="absolute inset-0 pointer-events-none" style="width: 100%; height: 100%;" @click="onConnectorClick($event)">
+      <defs>
+        <!-- A big hand-sketched dart: long swept-back barbs, a deeply
+             notched rear edge, and scribbled hatching that deliberately
+             overruns the outline (hence overflow="visible"). A plain
+             filled triangle reads as printed clip-art next to a
+             hand-drawn line; this reads as inked in by hand. -->
+        <marker id="map-arrow-default" markerWidth="30" markerHeight="26" refX="28" refY="13" orient="auto" markerUnits="userSpaceOnUse" overflow="visible">
+          <path d="M2,0.5 L28.5,13 L4,25.5 L11,13 Z" class="fill-stone-500 dark:fill-stone-400" stroke-linejoin="round" />
+          <path d="M6,5 L22,12 M5.5,9 L18,12.4 M7,19 L19,14.2 M6,23 L25,14 M12,10.5 L27,12.8 M12.5,15.5 L26,13.6 M9,7 L14,16"
+                class="stroke-stone-700 dark:stroke-stone-200" stroke-width="0.7" fill="none" stroke-linecap="round" opacity="0.75" />
+        </marker>
+        <marker id="map-arrow-sub" markerWidth="30" markerHeight="26" refX="28" refY="13" orient="auto" markerUnits="userSpaceOnUse" overflow="visible">
+          <path d="M2,0.5 L28.5,13 L4,25.5 L11,13 Z" class="fill-rust dark:fill-rust-light" stroke-linejoin="round" />
+          <path d="M6,5 L22,12 M5.5,9 L18,12.4 M7,19 L19,14.2 M6,23 L25,14 M12,10.5 L27,12.8 M12.5,15.5 L26,13.6 M9,7 L14,16"
+                class="stroke-[#7d3a26] dark:stroke-[#f0b49b]" stroke-width="0.7" fill="none" stroke-linecap="round" opacity="0.75" />
+        </marker>
+      </defs>
+      <g x-html="connectorMarkup" class="stroke-stone-400 dark:stroke-stone-500"></g>
+    </svg>
+
+    <template x-for="node in nodes" :key="node.id">
+      <div
+        class="map-card card-lift absolute select-none cursor-grab active:cursor-grabbing rounded-xl px-3 py-2.5"
+        :class="node.kind === 'label' ? kindMeta.label.badge + ' w-auto max-w-xs' : kindMeta[node.kind].badge + ' w-36 sm:w-44 border'"
+        :style="`left: ${node.x}%; top: ${node.y}%; transform: rotate(${rotation(node)}deg); transform-origin: center;`"
+        :data-node-id="node.id"
+        @pointerdown="startDrag($event, node)"
+        @pointerup="endDrag($event, node)"
+      >
+        <span
+          class="map-pin absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-rust dark:bg-rust-light border border-white/60 dark:border-stone-900/60 cursor-crosshair"
+          title="Drag to link to a label"
+          @pointerdown.stop="startConnect($event, node)"
+          @pointerup.stop="endConnect($event)"
+        ></span>
+
+        <template x-if="node.kind === 'label'">
+          <div>
+            <div class="map-font-title text-2xl sm:text-3xl font-bold leading-tight break-words" x-text="node.title"></div>
+            <div x-show="node.note" class="map-font-hand text-xs mt-1 opacity-80 break-words" x-text="node.note"></div>
+          </div>
+        </template>
+
+        <template x-if="node.kind !== 'label'">
+          <div>
+            <div class="text-[9px] uppercase tracking-wide font-semibold opacity-80" x-text="kindMeta[node.kind].label"></div>
+            <div class="map-font-title text-xl leading-tight mt-0.5 break-words" x-text="cardTitle(node)"></div>
+            <div class="map-font-hand text-[11px] mt-1 opacity-80 break-words" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;" x-text="cardNote(node)"></div>
+            <div x-show="node.target_date" class="map-font-hand text-[10px] mt-1.5 opacity-70" x-text="node.target_date ? ('by ' + node.target_date) : ''"></div>
+            <div x-show="(node.open_tasks || 0) + (node.done_tasks || 0) > 0" class="mt-1.5 flex items-center gap-1.5 text-[10px] opacity-80">
+              <span class="flex-1 h-1 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
+                <span class="block h-full rounded-full bg-violet-500" :style="`width: ${Math.round(100 * (node.done_tasks || 0) / Math.max(1, (node.open_tasks || 0) + (node.done_tasks || 0)))}%`"></span>
+              </span>
+              <span x-text="(node.done_tasks || 0) + '/' + ((node.open_tasks || 0) + (node.done_tasks || 0)) + ' tasks'"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- Unlink control for the selected connector, parked on the line.
+         Plain HTML rather than SVG so it gets normal button behaviour
+         (hover, focus, tap target) inside the pointer-events:none svg. -->
+    <button
+      x-show="selectedConnector"
+      x-cloak
+      type="button"
+      @click.stop="deleteSelectedConnector()"
+      :style="`left: ${selectedConnector ? selectedConnector.x : 0}px; top: ${selectedConnector ? selectedConnector.y : 0}px;`"
+      class="absolute z-20 -translate-x-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full bg-white dark:bg-stone-800 border border-rust/60 dark:border-rust-light/60 text-rust dark:text-rust-light shadow-float hover:bg-rust hover:text-white dark:hover:bg-rust-light dark:hover:text-stone-900"
+      title="Remove this link"
+      aria-label="Remove this link"
+    >&times;</button>
+  </div>
+
+  <!-- Add-to-map popover -->
+  <div x-show="adding" x-cloak @keydown.escape.window="adding = false" @click.self="adding = false" x-transition.opacity class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm px-4">
+    <div class="w-full max-w-sm rounded-lg bg-white dark:bg-stone-800 shadow-2xl border border-stone-200 dark:border-stone-700 p-4">
+      <div class="font-serif text-base text-stone-900 dark:text-stone-100 mb-3">Add to map</div>
+
+      <div class="flex flex-wrap gap-1.5 mb-3">
+        <template x-for="k in kinds" :key="k">
+          <button type="button" @click="newKind = k"
+            :class="newKind === k ? kindMeta[k].badge : 'bg-stone-50 dark:bg-stone-900 text-stone-500 dark:text-stone-400 border-stone-200 dark:border-stone-700'"
+            class="text-[11px] px-2.5 py-1 rounded-full border" x-text="kindMeta[k].label"></button>
+        </template>
+      </div>
+
+      <template x-if="newKind === 'project'">
+        <div>
+          <select x-model="newProjectId" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+            <option value="">Pick a project&hellip;</option>
+            <template x-for="p in pinnableProjects" :key="p.id">
+              <option :value="p.id" x-text="p.name"></option>
+            </template>
+          </select>
+          <p x-show="pinnableProjects.length === 0" class="text-[11px] text-stone-400 dark:text-stone-500 italic mt-1">All active projects are already pinned on this board.</p>
+        </div>
+      </template>
+
+      <template x-if="newKind !== 'project'">
+        <div class="space-y-2">
+          <input type="text" x-model="newTitle" :placeholder="newKind === 'label' ? 'e.g. September' : 'Title'" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          <textarea x-model="newNote" placeholder="Note (optional)" rows="2" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-none"></textarea>
+          <input x-show="newKind !== 'label'" type="date" x-model="newTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </div>
+      </template>
+
+      <!-- Available for every kind, including project and label (a label linking to another label is a sublabel) -->
+      <select x-show="labelOptions.length > 0" x-model="newLinkedLabelId" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light mt-2">
+        <option value="">No label</option>
+        <template x-for="l in labelOptions" :key="l.id">
+          <option :value="l.id" x-text="'Link to ' + l.title"></option>
+        </template>
+      </select>
+
+      <p x-show="addError" x-text="addError" class="text-[11px] text-red-600 dark:text-red-400 mt-2"></p>
+
+      <div class="flex items-center justify-end gap-2 mt-4">
+        <button type="button" @click="adding = false" class="text-xs px-3 py-1.5 rounded text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">Cancel</button>
+        <button type="button" @click="submitAdd()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium">Pin it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Card popup: a breakdown first (mode 'view'), the edit form behind Edit -->
+  <div x-show="active" x-cloak @keydown.escape.window="closeDetail()" @click.self="closeDetail()" x-transition.opacity class="fixed inset-0 z-40 flex items-center justify-center bg-black/40 dark:bg-black/60 backdrop-blur-sm px-4">
+    <template x-if="active">
+      <div class="w-full rounded-lg bg-white dark:bg-stone-800 shadow-2xl border border-stone-200 dark:border-stone-700 p-4 max-h-[88vh] overflow-y-auto" :class="mode === 'view' ? 'max-w-lg' : 'max-w-sm'">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border" :class="kindMeta[active.kind].badge" x-text="detail ? detail.kind_label : kindMeta[active.kind].label"></span>
+          <div class="flex items-center gap-1.5">
+            <button x-show="mode === 'view' && active.kind !== 'project'" type="button" @click="mode = 'edit'" class="text-xs px-2.5 py-1 rounded-full border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100">Edit</button>
+            <button x-show="mode === 'edit' && active.kind !== 'label'" type="button" @click="mode = 'view'" class="text-xs px-2.5 py-1 rounded-full text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">&#8592; Back</button>
+            <button type="button" @click="closeDetail()" class="w-6 h-6 text-stone-400 hover:text-stone-900 dark:hover:text-stone-100" aria-label="Close">&times;</button>
+          </div>
+        </div>
+
+        <!-- Breakdown -->
+        <template x-if="mode === 'view'">
+          <div>
+            <div class="map-font-title text-3xl leading-tight text-stone-900 dark:text-stone-100 break-words" x-text="detail ? detail.title : cardTitle(active)"></div>
+            <p x-show="detail && detail.created_at" class="mt-0.5 inline-flex items-center gap-1 text-[10.5px] text-stone-400 dark:text-stone-500 tabular-nums" :title="detail ? 'Added ' + stampFull(detail.created_at) : ''"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span x-text="detail ? 'Added ' + stamp(detail.created_at) : ''"></span></p>
+            <div class="flex items-center gap-2 flex-wrap mt-1 text-xs text-stone-500 dark:text-stone-400">
+              <template x-if="detail && detail.target_date">
+                <span>
+                  <span x-text="(detail.competition_id ? 'Deadline ' : 'By ') + detail.target_date.slice(0, 10)"></span>
+                  <span class="text-rust dark:text-rust-light" x-text="' · ' + daysLeft(detail.target_date)"></span>
+                </span>
+              </template>
+              <template x-if="detail && detail.label">
+                <span>under <span class="font-medium text-stone-700 dark:text-stone-200" x-text="detail.label.title"></span></span>
+              </template>
+            </div>
+
+            <p x-show="!detail && !detailError" class="text-xs text-stone-400 mt-3">Loading&hellip;</p>
+            <p x-show="detailError" x-text="detailError" class="text-xs text-red-600 dark:text-red-400 mt-3"></p>
+
+            <template x-if="detail">
+              <div>
+                <div class="mt-3">
+                  <div class="text-[10px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-1">About</div>
+                  <p x-show="detail.description" class="text-sm text-stone-700 dark:text-stone-200 leading-relaxed whitespace-pre-wrap break-words max-h-48 overflow-y-auto" x-text="detail.description"></p>
+                  <p x-show="!detail.description" class="text-sm text-stone-400 dark:text-stone-500 italic">No description yet — add one with Edit.</p>
+                </div>
+
+                <dl x-show="detail.facts.length || detail.url" class="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5">
+                  <template x-for="fact in detail.facts" :key="fact.label">
+                    <div>
+                      <dt class="text-[10px] uppercase tracking-wide text-stone-500 dark:text-stone-400" x-text="fact.label"></dt>
+                      <dd class="text-xs text-stone-800 dark:text-stone-100 break-words" x-text="fact.value"></dd>
+                    </div>
+                  </template>
+                  <template x-if="detail.url">
+                    <div class="col-span-2">
+                      <dt class="text-[10px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Link</dt>
+                      <dd class="text-xs break-all"><a :href="detail.url" target="_blank" rel="noopener noreferrer" class="text-rust dark:text-rust-light hover:underline" x-text="detail.url"></a></dd>
+                    </div>
+                  </template>
+                </dl>
+
+                <div class="mt-4 pt-3 border-t border-stone-100 dark:border-stone-700">
+                  <div class="flex items-baseline justify-between">
+                    <div class="text-[10px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Tasks</div>
+                    <div class="text-[11px] text-stone-500 dark:text-stone-400" x-text="detailOpenTasks.length + ' open · ' + detailDoneTasks.length + ' done'"></div>
+                  </div>
+                  <ul class="mt-1.5 space-y-0.5 max-h-56 overflow-y-auto">
+                    <template x-for="task in [...detailOpenTasks, ...detailOtherTasks, ...detailDoneTasks]" :key="task.id">
+                      <li class="group flex items-start gap-2 rounded px-1.5 py-1 hover:bg-stone-50 dark:hover:bg-stone-700/40">
+                        <button type="button" @click="toggleDetailTask(task)" :title="task.status === 'done' ? 'Mark as not done' : 'Mark as done'"
+                          class="mt-0.5 w-3.5 h-3.5 shrink-0 rounded border flex items-center justify-center"
+                          :class="task.status === 'done' ? 'bg-violet-500 border-violet-500 text-white' : 'border-stone-300 dark:border-stone-500'">
+                          <span x-show="task.status === 'done'" class="text-[9px] leading-none">&#10003;</span>
+                        </button>
+                        <a :href="task.url" class="flex-1 min-w-0 text-xs break-words" :class="task.status === 'done' ? 'line-through text-stone-400 dark:text-stone-500' : 'text-stone-800 dark:text-stone-100 group-hover:underline'" x-text="task.title + (task.due_date ? ' · due ' + task.due_date : '')"></a>
+                        <span x-show="task.stamp" class="shrink-0 text-[10px] text-stone-400 dark:text-stone-500 tabular-nums" :title="task.stamp ? task.stamp.label + ' ' + task.stamp.full : ''" x-text="task.stamp ? task.stamp.text : ''"></span>
+                      </li>
+                    </template>
+                  </ul>
+                  <p x-show="!detail.tasks.length" class="text-xs text-stone-400 dark:text-stone-500 italic mt-1">No tasks linked yet.</p>
+                  <form @submit.prevent="addDetailTask()" class="mt-2 flex gap-1.5">
+                    <input type="text" x-model="newTask" placeholder="Add a task for this…" maxlength="300" class="flex-1 min-w-0 text-xs bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+                    <button type="submit" :disabled="taskAdding || !newTask.trim()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">Add</button>
+                  </form>
+                  <p x-show="taskError" x-text="taskError" class="text-[11px] text-red-600 dark:text-red-400 mt-1"></p>
+                </div>
+
+                <div class="mt-3 flex items-center gap-3 flex-wrap">
+                  <a :href="detail.open_url" class="text-xs font-medium text-rust dark:text-rust-light hover:underline" x-text="detail.open_label + ' →'"></a>
+                  <a x-show="detail.save_url" :href="detail.save_url" class="text-xs px-2.5 py-1 rounded-full belongs-chip">Save to Competitions</a>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Edit form (a project card is edited on its project page instead) -->
+        <template x-if="mode === 'edit'">
+          <div class="space-y-2">
+            <input type="text" x-model="editTitle" class="w-full font-serif text-base bg-transparent border-b border-stone-200 dark:border-stone-700 px-0 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+            <textarea x-model="editNote" rows="5" placeholder="Description" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-y"></textarea>
+            <input x-show="active.kind !== 'label'" type="date" x-model="editTargetDate" class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+            <p x-show="editError" x-text="editError" class="text-[11px] text-red-600 dark:text-red-400"></p>
+            <button type="button" @click="saveDetail()" :disabled="editSaving" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">
+              <span x-show="!editSaving">Save</span><span x-show="editSaving">Saving&hellip;</span>
+            </button>
+          </div>
+        </template>
+
+        <!-- Label link + delete, shown with the edit form (and always for a
+             project card, whose own text is edited on its project page).
+             The link works on every kind — see update_map_node_label_link;
+             a label linking to a label is a sublabel. -->
+        <select
+          x-show="activeLabelOptions.length > 0 && (mode === 'edit' || active.kind === 'project')"
+          :value="active.linked_label_id || ''"
+          @change="setLabelLink(active.id, $event.target.value ? Number($event.target.value) : null)"
+          class="w-full text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light mt-3"
+        >
+          <option value="">No label</option>
+          <template x-for="l in activeLabelOptions" :key="l.id">
+            <option :value="l.id" :selected="l.id === active.linked_label_id" x-text="'Link to ' + l.title"></option>
+          </template>
+        </select>
+
+        <div x-show="mode === 'edit' || active.kind === 'project'" class="flex items-center justify-end mt-4 pt-3 border-t border-stone-100 dark:border-stone-700">
+          <button type="button" @click="removeActive()" class="text-[11px] text-stone-400 dark:text-stone-500 hover:text-red-600 dark:hover:text-red-400">
+            <span x-text="active.kind === 'project' ? 'Unpin from map' : 'Delete card'"></span>
+          </button>
+        </div>
+      </div>
+    </template>
+  </div>
+
+</main>
+{% endblock %}

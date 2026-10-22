@@ -1,0 +1,20 @@
+credentials.json
+.env
+secrets/
+*.db
+# SQLite's live side files (WAL mode): never tracked, and never swept up by
+# `git stash -u` while the app is running.
+*.db-wal
+*.db-shm
+__pycache__/
+.venv/
+*.log
+src/command_center/profile.py
+src/command_center/prompts.py
+license.key
+data/vision.md
+data/documents/
+data/attachments/
+CLAUDE.md
+prompt.md
+.claude/

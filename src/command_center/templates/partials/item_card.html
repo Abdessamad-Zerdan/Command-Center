@@ -1,0 +1,209 @@
+<article
+  x-data="{ removed: false, dragOverCard: false, card: null }"
+  x-init="card = $el"
+  x-show="!removed"
+  x-transition.duration.200ms
+  {% if not is_history %}
+  draggable="true"
+  @dragstart="$event.dataTransfer.setData('text/plain', '{{ item.id }}'); $event.dataTransfer.effectAllowed = 'move'"
+  @dragover.prevent.stop="dragOverCard = true"
+  @dragleave="dragOverCard = false"
+  @drop.prevent.stop="
+    dragOverCard = false;
+    const draggedId = $event.dataTransfer.getData('text/plain');
+    if (!draggedId || draggedId === '{{ item.id }}') return;
+    {# On the priority board neighbours can come from different lanes, so
+       a drop on a card means "same priority as this one", not a reorder
+       within a lane (which only works between siblings). #}
+    {% if priority_board %}
+    fetch(`/items/${draggedId}/priority`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ priority: {{ item.priority or 3 }} }),
+    }).then(r => { if (r.ok) window.location.reload(); });
+    {% else %}
+    fetch(`/items/${draggedId}/reorder`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ after_item_id: {{ item.id }} }),
+    }).then(r => { if (r.ok) window.location.reload(); });
+    {% endif %}
+  "
+  {% endif %}
+  @click='if (window.__itemModalReady) { window.__modalOrigin = $el; $dispatch("item-modal-open", {{ item | tojson }}); } else { window.location.href = "/items/{{ item.id }}/open"; }'
+  :class="dragOverCard ? 'ring-2 ring-rust dark:ring-rust-light' : ''"
+  data-item-id="{{ item.id }}"
+  data-reveal
+  class="card-lift mb-2 rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-3 py-3 cursor-pointer hover:border-stone-300 dark:hover:border-stone-600 {% if not is_history %}active:cursor-grabbing{% endif %} {% if item.priority == 1 %}border-l-2 border-l-rust dark:border-l-rust-light{% endif %}"
+>
+  <div class="flex items-start justify-between gap-2">
+    <h3 class="min-w-0 flex-1 break-words font-serif text-base text-stone-900 dark:text-stone-100 leading-snug {{ '' if full_height else 'line-clamp-3' }}">{{ item.title }}</h3>
+    <div class="shrink-0 flex flex-col items-end gap-1">
+      <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-700 text-stone-500 dark:text-stone-400">{{ item.source }}</span>
+      {% if priority_board and lane_labels is defined %}
+      <span class="text-[10px] px-1.5 py-0.5 rounded border border-stone-200 dark:border-stone-600 text-stone-500 dark:text-stone-400" title="Section">{{ lane_labels[item.lane] }}</span>
+      {% endif %}
+      <span
+        x-data="{ photos: {{ item.attachment_count or 0 }} }"
+        x-show="photos > 0"
+        @attachments-changed.window="if ($event.detail.id === {{ item.id }}) photos = $event.detail.count"
+        :title="photos + (photos === 1 ? ' photo' : ' photos')"
+        class="inline-flex items-center gap-0.5 text-[10px] text-stone-400 dark:text-stone-500"
+        {% if not item.attachment_count %}style="display: none;"{% endif %}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
+        <span x-text="photos">{{ item.attachment_count or 0 }}</span>
+      </span>
+    </div>
+  </div>
+  {% set _stamp = item_stamp(item) if item_stamp is defined else none %}
+  {% if _stamp %}
+  <p class="mt-1 inline-flex items-center gap-1 text-[10.5px] text-stone-400 dark:text-stone-500 tabular-nums" title="{{ _stamp.label }} {{ _stamp.full }}">
+    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <time datetime="{{ _stamp.iso }}">{{ _stamp.label }} {{ _stamp.text }}</time>
+  </p>
+  {% endif %}
+  {% if item.snoozed_until and item.snoozed_until == item.brief_date and not item.carried_from %}
+  <p class="mt-1 ml-1 inline-flex items-center gap-1 text-[10.5px] font-medium px-1.5 py-0.5 rounded-full bg-sky-50 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300" title="You set this for later; it's back today">Back from Later</p>
+  {% endif %}
+  {% if item.carried_from %}
+  <p class="mt-1 ml-1 inline-flex items-center gap-1 text-[10.5px] font-medium px-1.5 py-0.5 rounded-full tabular-nums bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-300" title="Still open from the {{ item.carried_from }} brief">From {{ item.carried_from }}</p>
+  {% endif %}
+  {% set _deadline = deadline_label(item) if deadline_label is defined else none %}
+  {% if _deadline %}
+  <p class="mt-1 ml-1 inline-flex items-center gap-1 text-[10.5px] font-medium px-1.5 py-0.5 rounded-full tabular-nums {{ 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300' if _deadline.missed else 'bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' }}" title="Deadline {{ _deadline.full }}">
+    {{ 'Deadline passed' if _deadline.missed else 'Deadline' }} · {{ _deadline.text }}
+  </p>
+  {% endif %}
+  {% if item.belongs_to %}
+  <div class="mt-1.5 flex flex-wrap gap-1">
+    {% for chip in item.belongs_to %}
+    <a href="{{ chip.url }}" @click.stop draggable="false" title="Open {{ chip.label | lower }}: {{ chip.name }}" class="link-chip belongs-chip inline-flex items-center gap-1 max-w-full text-[11px] px-1.5 py-0.5 rounded-full">
+      <span class="belongs-kind shrink-0">{{ chip.label }}</span>
+      <span class="truncate">{{ chip.name }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if item.priority_reason %}
+  <p class="mt-1 text-[11px] leading-snug text-stone-500 dark:text-stone-400 break-words" title="Why this priority">
+    <span class="font-medium {{ 'text-rust dark:text-rust-light' if item.priority == 1 else '' }}">{{ {1: 'High', 2: 'Medium'}.get(item.priority, 'Low') }}:</span> {{ item.priority_reason }}
+  </p>
+  {% endif %}
+  {% if item.time_logged_display %}
+  <p class="mt-1 text-[11px] text-stone-400 dark:text-stone-500">Time logged: {{ item.time_logged_display }}</p>
+  {% endif %}
+  {% if item.why_it_matters %}
+  <p class="mt-1.5 text-[15px] text-stone-600 dark:text-stone-300 leading-[1.4] break-words {{ '' if full_height else 'line-clamp-3' }}">{{ item.why_it_matters }}</p>
+  {% endif %}
+  {% if item.suggested_next_step %}
+  <p class="mt-1.5 text-[15px] text-stone-700 dark:text-stone-300 leading-[1.4] break-words {{ '' if full_height else 'line-clamp-2' }}"><span class="text-stone-500 dark:text-stone-400">Next:</span> {{ item.suggested_next_step }}</p>
+  {% endif %}
+  <div class="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+    {% if item.deep_link %}
+    <a href="{{ item.deep_link }}" target="_blank" rel="noopener" @click.stop class="text-sm text-rust dark:text-rust-light hover:text-[#9c4830] dark:hover:text-[#e08761] whitespace-nowrap">Open &#8599;</a>
+    {% else %}
+    <span></span>
+    {% endif %}
+    <div class="flex flex-wrap gap-1.5">
+      {% if is_history %}
+      <button
+        type="button"
+        @click.stop="fetch('/items/{{ item.id }}/move-to-today', { method: 'POST' }).then(r => {
+          if (r.ok) {
+            cardExit(card, 'today', () => { removed = true; });
+            $store.counts['{{ item.lane }}']--;
+            $store.toast.show('Brought to today', () => {
+              fetch('/items/{{ item.id }}/move-to-date', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date: '{{ item.brief_date }}' }),
+              }).then(r2 => { if (r2.ok) { cardExitCancel(card); removed = false; $store.counts['{{ item.lane }}']++; } });
+            });
+          }
+        })"
+        class="text-xs px-2 py-1 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 whitespace-nowrap"
+      >Bring to today</button>
+      {% endif %}
+      <div x-data="cardMenu()" class="relative">
+        <button
+          type="button"
+          x-ref="trigger"
+          @click.stop="toggle()"
+          aria-label="More actions"
+          aria-haspopup="true"
+          :aria-expanded="open"
+          class="w-8 h-8 flex items-center justify-center rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19" cy="12" r="2.2"/></svg>
+        </button>
+
+        <template x-teleport="body">
+          <div
+            x-ref="panel"
+            x-show="open"
+            x-cloak
+            @click.outside="close()"
+            @keydown.escape.window="close()"
+            @scroll.window="close()"
+            @resize.window="close()"
+            x-transition:enter="transition ease-out duration-150"
+            x-transition:enter-start="opacity-0 scale-95"
+            x-transition:enter-end="opacity-100 scale-100"
+            x-transition:leave="transition ease-in duration-100"
+            x-transition:leave-start="opacity-100 scale-100"
+            x-transition:leave-end="opacity-0 scale-95"
+            :style="`top: ${top}px; left: ${left}px;`"
+            class="fixed z-50 w-48 rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 shadow-float py-1 origin-top-right"
+          >
+            <a
+              href="/?pomodoro_task_id={{ item.id }}&pomodoro_task_name={{ item.title | urlencode }}"
+              @click="close()"
+              class="block px-3 py-2.5 text-sm text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+            >Start Pomodoro</a>
+            <button
+              type="button"
+              @click="close(); fetch('/items/{{ item.id }}/snooze', { method: 'POST' }).then(r => {
+                if (r.ok) {
+                  cardExit(card, 'snooze', () => { removed = true; });
+                  $store.counts['{{ item.lane }}']--;
+                  $store.toast.show('Back tomorrow', () => {
+                    fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { cardExitCancel(card); removed = false; $store.counts['{{ item.lane }}']++; } });
+                  });
+                }
+              })"
+              class="block w-full text-left px-3 py-2.5 text-sm text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+             title="Hide it today; it comes back on tomorrow's brief">Later · tomorrow</button>
+            <button
+              type="button"
+              @click="close(); fetch('/items/{{ item.id }}/done', { method: 'POST' }).then(r => {
+                if (r.ok) {
+                  cardExit(card, 'done', () => { removed = true; });
+                  $store.counts['{{ item.lane }}']--;
+                  $store.toast.show('Marked done', () => {
+                    fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { cardExitCancel(card); removed = false; $store.counts['{{ item.lane }}']++; } });
+                  });
+                }
+              })"
+              class="block w-full text-left px-3 py-2.5 text-sm text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+            >Done</button>
+            <div class="my-1 border-t border-stone-200 dark:border-stone-700"></div>
+            <button
+              type="button"
+              @click="close(); fetch('/items/{{ item.id }}/dismiss', { method: 'POST' }).then(r => {
+                if (r.ok) {
+                  cardExit(card, 'dismiss', () => { removed = true; });
+                  $store.counts['{{ item.lane }}']--;
+                  $store.toast.show('Dismissed', () => {
+                    fetch('/items/{{ item.id }}/reopen', { method: 'POST' }).then(r2 => { if (r2.ok) { cardExitCancel(card); removed = false; $store.counts['{{ item.lane }}']++; } });
+                  });
+                }
+              })"
+              class="block w-full text-left px-3 py-2.5 text-sm text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+            >Dismiss</button>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</article>

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="min-h-screen flex flex-col items-center px-4 py-10 sm:py-16">
+  <div class="w-full max-w-lg">
+    <div class="mb-6 flex items-center justify-between text-xs text-stone-500 dark:text-stone-400">
+      <span>Step {{ current_step }} of {{ total_steps }}</span>
+      {% if prev_url %}
+      <form method="post" action="/setup/back">
+        <button type="submit" class="hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back</button>
+      </form>
+      {% endif %}
+    </div>
+    <div class="w-full bg-stone-200 dark:bg-stone-700 rounded-full h-1 mb-8">
+      <div
+        class="bg-rust dark:bg-rust-light h-1 rounded-full"
+        style="width: {{ (current_step / total_steps * 100) | round(1) }}%"
+      ></div>
+    </div>
+
+    {% block setup_content %}{% endblock %}
+  </div>
+</div>
+{% endblock %}

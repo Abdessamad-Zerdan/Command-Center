@@ -1,0 +1,867 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Competitions{% endblock %}
+{% block content %}
+<style>
+  /* Entrance is a short rise only — never from invisible, so the cards
+     are readable from the first frame (motion must not gate content). */
+  .comp-enter { animation: compIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+  @keyframes compIn {
+    from { transform: translateY(6px); }
+  }
+  .comp-star-pop { animation: starPop 420ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+  @keyframes starPop { 40% { transform: scale(1.35) rotate(-12deg); } }
+  .comp-urgent-dot { animation: urgentPulse 1.6s ease-in-out infinite; }
+  @keyframes urgentPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgb(239 68 68 / 0.55); }
+    50% { box-shadow: 0 0 0 5px rgb(239 68 68 / 0); }
+  }
+  .comp-drop { transition: border-color 200ms ease, background-color 200ms ease, transform 200ms ease; }
+  .comp-drop.is-over { transform: scale(1.01); }
+  .comp-shot-in { animation: shotIn 480ms cubic-bezier(0.2, 0.9, 0.1, 1) both; }
+  @keyframes shotIn { from { opacity: 0; transform: scale(0.96); filter: blur(4px); } }
+  .comp-sheet-enter { animation: sheetIn 460ms cubic-bezier(0.2, 0.9, 0.1, 1) both; }
+  @keyframes sheetIn { from { opacity: 0; transform: translateY(28px) scale(0.98); } }
+  .comp-viewer { animation: viewerFade 240ms ease-out both; }
+  .comp-viewer img { animation: viewerZoom 420ms cubic-bezier(0.2, 0.9, 0.1, 1) both; }
+  @keyframes viewerFade { from { opacity: 0; } }
+  @keyframes viewerZoom { from { opacity: 0; transform: scale(0.92); filter: blur(4px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .comp-enter, .comp-star-pop, .comp-urgent-dot, .comp-shot-in, .comp-sheet-enter, .comp-viewer, .comp-viewer img { animation: none; }
+  }
+</style>
+
+<script>
+  // Static, trusted icon markup (never user data) — rendered with x-html.
+  const COMP_ICONS = {
+    hackathon: '<path d="m18 16 4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16"/>',
+    competition: '<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3"/>',
+    fellowship: '<path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/>',
+    other: '<path d="M12 3l1.9 5.8L20 10l-5 3.6L16.8 20 12 16.6 7.2 20 9 13.6 4 10l6.1-1.2L12 3Z"/>',
+  };
+  const COMP_KIND_LABELS = { hackathon: 'Hackathon', competition: 'Competition', fellowship: 'Fellowship', other: 'Other' };
+  const COMP_STATUSES = [
+    { key: 'saved', label: 'Saved' },
+    { key: 'shortlisted', label: 'Shortlisted' },
+    { key: 'applied', label: 'Applied' },
+    { key: 'passed', label: 'Passed' },
+  ];
+  const COMP_EMPTY_FIELDS = () => ({
+    title: '', url: '', kind: 'hackathon', organizer: '', deadline: '',
+    event_dates: '', location: '', prize: '', notes: '',
+  });
+
+  function competitionsBoard(initial, today, boardCards) {
+    return {
+      items: initial,
+      // Competition/hackathon cards already made on the Map but not saved
+      // here yet — the composer offers them so saving one adopts the card.
+      boardCards: boardCards || [],
+      today: today,
+      filter: 'all',
+      query: '',
+      statuses: COMP_STATUSES,
+      kinds: Object.keys(COMP_KIND_LABELS),
+
+      detail: null,
+      origin: null,
+      closingDetail: false,
+      _closeAnims: null,
+      viewer: null,
+
+      // Tasks linked to the competition open in the detail view.
+      tasks: [],
+      tasksLoading: false,
+      taskDraft: '',
+      taskError: '',
+      addingTask: false,
+
+      composer: {
+        open: false,
+        editingId: null,
+        fields: COMP_EMPTY_FIELDS(),
+        shot: null,
+        shotPreview: null,
+        existingShot: null,
+        removeShot: false,
+        dragging: false,
+        saving: false,
+        error: '',
+        fromCardId: null,
+      },
+
+      // ?open=ID (from a task card's competition chip, or the task popup)
+      // opens that competition, grown out of its card when it's on screen.
+      init() {
+        const params = new URLSearchParams(window.location.search);
+        // ?adopt=CARD — "Save to Competitions" on a Map card: the composer
+        // opens with that card already picked.
+        const adoptId = parseInt(params.get('adopt'), 10);
+        if (adoptId) {
+          history.replaceState(null, '', window.location.pathname);
+          const card = this.boardCards.find((x) => x.id === adoptId);
+          if (card) setTimeout(() => { this.openComposer(); this.pickBoardCard(card); }, 250);
+          return;
+        }
+        const openId = parseInt(params.get('open'), 10);
+        if (!openId) return;
+        history.replaceState(null, '', window.location.pathname);
+        const c = this.items.find((x) => x.id === openId);
+        if (!c) return;
+        this.filter = 'all';
+        setTimeout(() => {
+          const card = document.querySelector(`[data-competition-id="${openId}"]`);
+          if (card) card.scrollIntoView({ block: 'center' });
+          this.openDetail(c, card);
+        }, 350);
+      },
+
+      // --- presentation helpers -----------------------------------------
+      icon(kind, size = 16) {
+        return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${COMP_ICONS[kind] || COMP_ICONS.other}</svg>`;
+      },
+      kindLabel(kind) { return COMP_KIND_LABELS[kind] || 'Other'; },
+      // A cover for entries without a screenshot: a soft two-tone gradient
+      // whose hue comes from the title, so every card gets its own colour
+      // and the same entry always looks the same.
+      coverStyle(c) {
+        let h = 0;
+        for (const ch of c.title) h = (h * 31 + ch.charCodeAt(0)) % 360;
+        return `background: radial-gradient(120% 90% at 20% 15%, hsl(${h} 70% 78%) 0%, transparent 60%), linear-gradient(135deg, hsl(${h} 55% 62%) 0%, hsl(${(h + 45) % 360} 50% 42%) 100%);`;
+      },
+      daysLeft(c) {
+        if (!c.deadline) return null;
+        return Math.round((Date.parse(c.deadline) - Date.parse(this.today)) / 86400000);
+      },
+      deadlineLabel(c) {
+        const d = this.daysLeft(c);
+        if (d === null) return 'No deadline';
+        if (d < 0) return 'Closed';
+        if (d === 0) return 'Due today';
+        if (d === 1) return '1 day left';
+        if (d <= 60) return `${d} days left`;
+        return 'Due ' + this.formatDate(c.deadline);
+      },
+      // calm → amber in the last two weeks → red and pulsing in the last three days
+      deadlineTone(c) {
+        const d = this.daysLeft(c);
+        if (d === null || d < 0) return 'muted';
+        if (d <= 3) return 'urgent';
+        if (d <= 14) return 'soon';
+        return 'calm';
+      },
+      formatDate(iso) {
+        if (!iso) return '';
+        return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      },
+      metaLine(c) { return [c.organizer, c.location].filter(Boolean).join(' · '); },
+      host(url) {
+        try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return url; }
+      },
+
+      // --- list ---------------------------------------------------------
+      count(status) {
+        return status === 'all' ? this.items.length : this.items.filter((c) => c.status === status).length;
+      },
+      // Upcoming deadlines first (soonest on top), then no-deadline, then
+      // closed; passed ones sink to the bottom.
+      rank(c) {
+        if (c.status === 'passed') return 3;
+        const d = this.daysLeft(c);
+        if (d === null) return 1;
+        return d < 0 ? 2 : 0;
+      },
+      get visible() {
+        const q = this.query.trim().toLowerCase();
+        return this.items
+          .filter((c) => this.filter === 'all' || c.status === this.filter)
+          .filter((c) => !q || [c.title, c.organizer, c.location, c.prize, c.notes, c.kind].some((v) => v && v.toLowerCase().includes(q)))
+          .sort((a, b) => this.rank(a) - this.rank(b) || (a.deadline || '9999').localeCompare(b.deadline || '9999') || b.id - a.id);
+      },
+      _replace(updated) {
+        // open_tasks is page-only (the API doesn't return it) — carry it over.
+        const merge = (c) => ({ ...updated, open_tasks: c.open_tasks || 0 });
+        this.items = this.items.map((c) => (c.id === updated.id ? merge(c) : c));
+        if (this.detail && this.detail.id === updated.id) this.detail = merge(this.detail);
+      },
+
+      // --- linked tasks -------------------------------------------------
+      loadTasks(competitionId) {
+        this.tasks = [];
+        this.taskDraft = '';
+        this.taskError = '';
+        this.tasksLoading = true;
+        fetch(`/competitions/${competitionId}/tasks`)
+          .then((r) => this._json(r))
+          .then((tasks) => {
+            if (this.detail && this.detail.id === competitionId) this.tasks = tasks;
+          })
+          .catch(() => {})
+          .finally(() => { this.tasksLoading = false; });
+      },
+      _setOpenCount(competitionId) {
+        const n = this.tasks.filter((t) => t.status === 'pending').length;
+        this.items.forEach((c) => { if (c.id === competitionId) c.open_tasks = n; });
+        if (this.detail && this.detail.id === competitionId) this.detail.open_tasks = n;
+      },
+      addTask() {
+        const title = this.taskDraft.trim();
+        if (!title || this.addingTask || !this.detail) return;
+        const competitionId = this.detail.id;
+        this.addingTask = true;
+        this.taskError = '';
+        fetch(`/competitions/${competitionId}/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        }).then((r) => this._json(r))
+          .then((task) => {
+            this.tasks.unshift(task);
+            this.taskDraft = '';
+            this._setOpenCount(competitionId);
+            this.$store.toast.show('Added to today\'s brief');
+          })
+          .catch((e) => { this.taskError = e.message; })
+          .finally(() => { this.addingTask = false; });
+      },
+      taskStatusLabel(t) {
+        return { done: 'Done', dismissed: 'Dismissed', snoozed: 'Snoozed' }[t.status] || '';
+      },
+      _json(response) {
+        return response.json().catch(() => ({})).then((data) => {
+          if (!response.ok) throw new Error(data.detail || 'Something went wrong.');
+          return data;
+        });
+      },
+
+      setStatus(c, status) {
+        fetch(`/competitions/${c.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status }),
+        }).then((r) => this._json(r)).then((updated) => this._replace(updated))
+          .catch((e) => this.$store.toast.show(e.message));
+      },
+      toggleShortlist(c, button) {
+        if (button) {
+          button.classList.remove('comp-star-pop');
+          void button.offsetWidth;
+          button.classList.add('comp-star-pop');
+        }
+        this.setStatus(c, c.status === 'shortlisted' ? 'saved' : 'shortlisted');
+      },
+      sendToMap(c) {
+        fetch(`/competitions/${c.id}/to-map`, { method: 'POST' })
+          .then((r) => this._json(r))
+          .then(() => this.$store.toast.show('Added to your Map'))
+          .catch((e) => this.$store.toast.show(e.message));
+      },
+      remove(c) {
+        if (!window.confirm(`Delete "${c.title}"? This can't be undone.`)) return;
+        fetch(`/competitions/${c.id}`, { method: 'DELETE' })
+          .then((r) => this._json(r))
+          .then(() => {
+            this._finishCloseDetail();
+            this.items = this.items.filter((x) => x.id !== c.id);
+          })
+          .catch((e) => this.$store.toast.show(e.message));
+      },
+
+      // --- detail: grows out of the card it was opened from ---------------
+      _box(from, to) {
+        const dx = (from.left + from.width / 2) - (to.left + to.width / 2);
+        const dy = (from.top + from.height / 2) - (to.top + to.height / 2);
+        return `translate(${dx}px, ${dy}px) scale(${from.width / to.width}, ${from.height / to.height})`;
+      },
+      openDetail(c, el) {
+        if (this.closingDetail) this._finishCloseDetail();
+        this.detail = c;
+        this.origin = el;
+        this.loadTasks(c.id);
+        this.$nextTick(() => {
+          const panel = this.$refs.dPanel;
+          if (!panel || (window.reducedMotion && window.reducedMotion.matches)) return;
+          this.$refs.dBackdrop.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 320, easing: 'ease-out' });
+          const to = panel.getBoundingClientRect();
+          let start = 'translateY(48px) scale(0.96)';
+          if (el && el.isConnected) {
+            start = this._box(el.getBoundingClientRect(), to);
+            el.style.visibility = 'hidden';
+          }
+          panel.animate([{ transform: start, opacity: 0.9 }, { transform: 'none', opacity: 1 }], { duration: 560, easing: 'cubic-bezier(0.2, 0.9, 0.1, 1)' });
+          this.$refs.dContent.animate(
+            [{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }],
+            { duration: 420, delay: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'backwards' },
+          );
+        });
+      },
+      closeDetail() {
+        if (!this.detail || this.closingDetail) return;
+        const panel = this.$refs.dPanel;
+        if (!panel || (window.reducedMotion && window.reducedMotion.matches)) { this._finishCloseDetail(); return; }
+        this.closingDetail = true;
+        const from = panel.getBoundingClientRect();
+        const target = this.origin && this.origin.isConnected ? this.origin.getBoundingClientRect() : null;
+        const home = target && target.width > 0 && target.bottom > 0 && target.top < window.innerHeight;
+        const end = home ? this._box(target, from) : 'translateY(36px) scale(0.96)';
+        const anim = panel.animate([{ transform: 'none', opacity: 1 }, { transform: end, opacity: home ? 0.95 : 0 }], { duration: 440, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', fill: 'forwards' });
+        this._closeAnims = [
+          anim,
+          this.$refs.dContent.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, fill: 'forwards' }),
+          this.$refs.dBackdrop.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 380, easing: 'ease-in', fill: 'forwards' }),
+        ];
+        anim.onfinish = () => this._finishCloseDetail();
+      },
+      _finishCloseDetail() {
+        (this._closeAnims || []).forEach((a) => a.cancel());
+        this._closeAnims = null;
+        if (this.origin) this.origin.style.visibility = '';
+        this.origin = null;
+        this.detail = null;
+        this.viewer = null;
+        this.closingDetail = false;
+      },
+
+      // --- composer: new or edit ----------------------------------------
+      openComposer(competition = null, shotFile = null) {
+        const c = this.composer;
+        c.editingId = competition ? competition.id : null;
+        c.fields = COMP_EMPTY_FIELDS();
+        if (competition) {
+          for (const key of Object.keys(c.fields)) c.fields[key] = competition[key] || (key === 'kind' ? 'hackathon' : '');
+        }
+        c.existingShot = competition ? competition.screenshot_url : null;
+        c.fromCardId = null;
+        c.removeShot = false;
+        c.error = '';
+        c.saving = false;
+        this.setShot(null);
+        if (shotFile) this.setShot(shotFile);
+        c.open = true;
+        this.$nextTick(() => {
+          const title = this.$refs.composerTitle;
+          if (title) title.focus();
+        });
+      },
+      // Fills the form from a Map card; saving then links that card.
+      pickBoardCard(card) {
+        const c = this.composer;
+        if (c.fromCardId === card.id) { c.fromCardId = null; c.fields = COMP_EMPTY_FIELDS(); return; }
+        c.fromCardId = card.id;
+        c.fields.title = card.title || '';
+        c.fields.kind = card.kind === 'hackathon' ? 'hackathon' : 'competition';
+        if (card.note) c.fields.notes = card.note;
+        if (card.target_date) c.fields.deadline = card.target_date.slice(0, 10);
+        c.error = '';
+      },
+      closeComposer() {
+        this.setShot(null);
+        this.composer.open = false;
+      },
+      setShot(file) {
+        const c = this.composer;
+        if (c.shotPreview) URL.revokeObjectURL(c.shotPreview);
+        c.shot = null;
+        c.shotPreview = null;
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+          c.error = 'That isn\'t an image — paste or drop a screenshot.';
+          return;
+        }
+        c.error = '';
+        c.shot = file;
+        c.shotPreview = URL.createObjectURL(file);
+        c.removeShot = false;
+      },
+      clearShot() {
+        this.setShot(null);
+        if (this.composer.existingShot) this.composer.removeShot = true;
+      },
+      // Screenshot something, press Ctrl+V anywhere on this page: the
+      // composer opens with it already in place (or takes it, if open).
+      onPaste(event) {
+        const files = event.clipboardData ? Array.from(event.clipboardData.files).filter((f) => f.type.startsWith('image/')) : [];
+        if (!files.length || this.detail) return;
+        event.preventDefault();
+        if (this.composer.open) this.setShot(files[0]);
+        else this.openComposer(null, files[0]);
+      },
+      onKey(event) {
+        if (event.key !== 'Escape') return;
+        if (this.viewer) this.viewer = null;
+        else if (this.composer.open) this.closeComposer();
+        else if (this.detail) this.closeDetail();
+      },
+      async save() {
+        const c = this.composer;
+        if (c.saving) return;
+        if (!c.fields.title.trim()) { c.error = 'Give it a name.'; return; }
+        c.saving = true;
+        c.error = '';
+        try {
+          const editing = c.editingId !== null;
+          let saved = await fetch(editing ? `/competitions/${c.editingId}` : '/competitions', {
+            method: editing ? 'PATCH' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(editing || !c.fromCardId ? c.fields : { ...c.fields, from_card_id: c.fromCardId }),
+          }).then((r) => this._json(r));
+          if (!editing && c.fromCardId) this.boardCards = this.boardCards.filter((x) => x.id !== c.fromCardId);
+          if (c.shot) {
+            const body = new FormData();
+            body.append('file', c.shot);
+            saved = await fetch(`/competitions/${saved.id}/screenshot`, { method: 'POST', body }).then((r) => this._json(r));
+          } else if (editing && c.removeShot) {
+            saved = await fetch(`/competitions/${saved.id}/screenshot`, { method: 'DELETE' }).then((r) => this._json(r));
+          }
+          if (editing) this._replace(saved);
+          else this.items = [saved, ...this.items];
+          if (!editing && this.filter !== 'all' && this.filter !== saved.status) this.filter = 'all';
+          this.closeComposer();
+          this.$store.toast.show(editing ? 'Saved changes' : 'Saved for later');
+        } catch (e) {
+          c.error = e.message;
+        } finally {
+          c.saving = false;
+        }
+      },
+    };
+  }
+</script>
+
+<header class="frost-header border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Competitions</h1>
+    <a href="/brief" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to brief</a>
+  </div>
+</header>
+{% include "partials/pursuits_tabs.html" %}
+
+<main
+  x-data='competitionsBoard({{ competitions | tojson }}, {{ today | tojson }}, {{ board_cards | tojson }})'
+  @paste.window="onPaste($event)"
+  @keydown.window="onKey($event)"
+  class="px-4 sm:px-6 py-6 max-w-7xl"
+>
+  <section class="flex flex-wrap items-end justify-between gap-4 mb-5" data-reveal>
+    <div>
+      <h2 class="font-serif text-2xl sm:text-3xl text-stone-900 dark:text-stone-100">Saved for later</h2>
+      <p class="mt-1 text-sm text-stone-500 dark:text-stone-400 max-w-xl">
+        Hackathons and competitions you've spotted. Screenshot one, then press
+        <kbd class="px-1.5 py-0.5 rounded border border-stone-300 dark:border-stone-600 text-[11px] font-sans">Ctrl</kbd>
+        <kbd class="px-1.5 py-0.5 rounded border border-stone-300 dark:border-stone-600 text-[11px] font-sans">V</kbd>
+        anywhere here to save it.
+      </p>
+    </div>
+    <button
+      type="button"
+      @click="openComposer()"
+      class="card-lift inline-flex items-center gap-2 text-sm px-4 py-2 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      Save one
+    </button>
+  </section>
+
+  <section class="flex flex-wrap items-center justify-between gap-3 mb-6" data-reveal>
+    <div class="flex flex-wrap gap-1.5" role="tablist" aria-label="Filter by status">
+      <template x-for="tab in [{ key: 'all', label: 'All' }, ...statuses]" :key="tab.key">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="filter === tab.key"
+          @click="filter = tab.key"
+          :class="filter === tab.key
+            ? 'bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 border-transparent'
+            : 'bg-white/60 dark:bg-stone-800/50 text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700 hover:border-stone-400 dark:hover:border-stone-500'"
+          class="text-xs px-3 py-1.5 rounded-full border backdrop-blur-sm"
+        >
+          <span x-text="tab.label"></span>
+          <span class="ml-1 tabular-nums opacity-60" x-text="count(tab.key)"></span>
+        </button>
+      </template>
+    </div>
+    <label class="relative">
+      <span class="sr-only">Search</span>
+      <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input
+        type="search"
+        x-model="query"
+        placeholder="Search name, organizer, prize…"
+        class="w-60 text-xs bg-white/70 dark:bg-stone-800/60 backdrop-blur-sm border border-stone-200 dark:border-stone-700 rounded-full pl-8 pr-3 py-1.5 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+      >
+    </label>
+  </section>
+
+  <div class="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <template x-for="(c, i) in visible" :key="c.id">
+      <article
+        @click="openDetail(c, $el)"
+        :data-competition-id="c.id"
+        :style="`animation-delay: ${Math.min(i, 12) * 20}ms`"
+        :class="c.status === 'passed' ? 'opacity-55 saturate-50' : ''"
+        class="comp-enter card-lift group relative flex flex-col rounded-2xl overflow-hidden border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 cursor-pointer"
+      >
+        <div class="relative aspect-[16/10] overflow-hidden bg-stone-100 dark:bg-stone-900">
+          <template x-if="c.screenshot_url">
+            <img :src="c.screenshot_url" alt="" loading="lazy" class="w-full h-full object-cover object-top transition-transform duration-[900ms] ease-out group-hover:scale-[1.05]">
+          </template>
+          <template x-if="!c.screenshot_url">
+            <div class="w-full h-full flex items-center justify-center text-white/45 transition-transform duration-[900ms] ease-out group-hover:scale-[1.05]" :style="coverStyle(c)" x-html="icon(c.kind, 56)"></div>
+          </template>
+          <div class="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/55 via-black/10 to-transparent pointer-events-none"></div>
+
+          <span class="absolute top-2.5 left-2.5 inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide px-2 py-1 rounded-full bg-white/85 dark:bg-stone-900/80 text-stone-700 dark:text-stone-200 backdrop-blur-sm">
+            <span x-html="icon(c.kind, 12)"></span>
+            <span x-text="kindLabel(c.kind)"></span>
+          </span>
+
+          <button
+            type="button"
+            @click.stop="toggleShortlist(c, $el)"
+            :aria-pressed="c.status === 'shortlisted'"
+            :aria-label="c.status === 'shortlisted' ? 'Remove from shortlist' : 'Shortlist'"
+            :class="c.status === 'shortlisted' ? 'text-amber-400' : 'text-white/80 hover:text-white'"
+            class="absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center bg-black/25 hover:bg-black/40 backdrop-blur-sm"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" :fill="c.status === 'shortlisted' ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9L12 3Z"/></svg>
+          </button>
+
+          <span class="absolute bottom-2.5 left-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-full bg-black/35 text-white backdrop-blur-md">
+            <span
+              class="w-1.5 h-1.5 rounded-full"
+              :class="{
+                'bg-red-500 comp-urgent-dot': deadlineTone(c) === 'urgent',
+                'bg-amber-400': deadlineTone(c) === 'soon',
+                'bg-emerald-400': deadlineTone(c) === 'calm',
+                'bg-stone-400': deadlineTone(c) === 'muted',
+              }"
+            ></span>
+            <span x-text="deadlineLabel(c)"></span>
+          </span>
+        </div>
+
+        <div class="flex-1 flex flex-col p-3.5">
+          <h3 class="font-serif text-base leading-snug text-stone-900 dark:text-stone-100 line-clamp-2" x-text="c.title"></h3>
+          <p class="mt-1 text-xs text-stone-500 dark:text-stone-400 truncate" x-show="metaLine(c)" x-text="metaLine(c)"></p>
+          <p class="mt-1 inline-flex items-center gap-1 text-[10.5px] text-stone-400 dark:text-stone-500 tabular-nums" x-show="c.created_at" :title="'Saved ' + stampFull(c.created_at)"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span x-text="'Saved ' + stamp(c.created_at)"></span></p>
+          <div class="mt-auto pt-3 flex items-center justify-between gap-2 text-xs">
+            <span
+              x-show="c.open_tasks > 0"
+              :title="c.open_tasks + (c.open_tasks === 1 ? ' open task' : ' open tasks')"
+              class="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full bg-rust/10 text-rust dark:text-rust-light"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+              <span x-text="c.open_tasks"></span>
+            </span>
+            <span class="inline-flex items-center gap-1 text-stone-600 dark:text-stone-300 truncate" x-show="c.prize">
+              <span class="text-amber-500 shrink-0" x-html="icon('competition', 13)"></span>
+              <span class="truncate" x-text="c.prize"></span>
+            </span>
+            <span
+              x-show="c.status === 'applied' || c.status === 'passed'"
+              :class="c.status === 'applied' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-stone-100 text-stone-500 dark:bg-stone-700 dark:text-stone-400'"
+              class="ml-auto shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded"
+              x-text="c.status === 'applied' ? 'Applied' : 'Passed'"
+            ></span>
+          </div>
+        </div>
+      </article>
+    </template>
+  </div>
+
+  <template x-if="items.length === 0">
+    <div class="comp-enter mt-6 flex flex-col items-center text-center py-16 px-6 rounded-2xl border border-dashed border-stone-300 dark:border-stone-700 bg-white/40 dark:bg-stone-800/30 backdrop-blur-sm">
+      <div class="all-clear-ring !w-12 !h-12 !border-2 mb-5" style="border-color: rgb(217 119 87 / 0.6);"></div>
+      <h3 class="font-serif text-xl text-stone-900 dark:text-stone-100">Nothing saved yet</h3>
+      <p class="mt-2 text-sm text-stone-500 dark:text-stone-400 max-w-sm">
+        Next time you spot a hackathon or competition online, screenshot it
+        and press Ctrl+V here — it'll be waiting when you're ready to decide.
+      </p>
+      <button type="button" @click="openComposer()" class="mt-5 text-sm text-rust dark:text-rust-light hover:underline">Or add one by hand</button>
+    </div>
+  </template>
+  <template x-if="items.length > 0 && visible.length === 0">
+    <p class="mt-10 text-center text-sm text-stone-500 dark:text-stone-400">Nothing matches — try another filter or search.</p>
+  </template>
+
+  <!-- Detail -->
+  <template x-if="detail">
+    <div x-ref="dBackdrop" class="fixed inset-0 z-40 bg-black/45 flex items-center justify-center p-4 sm:p-8" @click.self="closeDetail()">
+      <div
+        x-ref="dPanel"
+        class="shadow-float w-full max-w-4xl max-h-[88vh] overflow-y-auto rounded-2xl border border-stone-200 dark:border-stone-700 bg-white/95 dark:bg-stone-800/95 backdrop-blur-md md:grid md:grid-cols-[1.25fr_1fr]"
+      >
+        <div class="relative bg-stone-100 dark:bg-stone-900 min-h-[220px] md:min-h-[420px] overflow-hidden md:rounded-l-2xl">
+          <template x-if="detail.screenshot_url">
+            <!-- The whole screenshot, never cropped, floating over a soft
+                 blurred copy of itself that fills the rest of the pane. -->
+            <button type="button" class="absolute inset-0 block w-full h-full group/shot" @click="viewer = detail.screenshot_url" aria-label="View screenshot full size">
+              <img :src="detail.screenshot_url" alt="" aria-hidden="true" class="absolute inset-0 w-full h-full object-cover scale-125 blur-2xl opacity-70 saturate-150">
+              <img :src="detail.screenshot_url" alt="" class="relative w-full h-full object-contain p-4 md:p-6 drop-shadow-2xl transition-transform duration-500 group-hover/shot:scale-[1.02]">
+            </button>
+          </template>
+          <template x-if="!detail.screenshot_url">
+            <div class="absolute inset-0 flex items-center justify-center text-white/45" :style="coverStyle(detail)" x-html="icon(detail.kind, 88)"></div>
+          </template>
+        </div>
+
+        <div x-ref="dContent" class="p-5 sm:p-6 flex flex-col gap-4">
+          <div class="flex items-center justify-between gap-2">
+            <span class="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide px-2 py-1 rounded-full bg-stone-100 dark:bg-stone-700 text-stone-600 dark:text-stone-300">
+              <span x-html="icon(detail.kind, 12)"></span>
+              <span x-text="kindLabel(detail.kind)"></span>
+            </span>
+            <button type="button" @click="closeDetail()" aria-label="Close" class="w-8 h-8 rounded-full flex items-center justify-center text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-100 dark:hover:bg-stone-700">&times;</button>
+          </div>
+
+          <div>
+            <h2 class="font-serif text-2xl leading-tight text-stone-900 dark:text-stone-100" x-text="detail.title"></h2>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400" x-show="detail.organizer" x-text="detail.organizer"></p>
+            <p class="mt-1 inline-flex items-center gap-1 text-[10.5px] text-stone-400 dark:text-stone-500 tabular-nums" x-show="detail.created_at" :title="'Saved ' + stampFull(detail.created_at)"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span x-text="'Saved ' + stamp(detail.created_at)"></span></p>
+          </div>
+
+          <dl class="grid grid-cols-2 gap-3 text-sm">
+            <div class="col-span-2 rounded-lg px-3 py-2.5 bg-stone-50 dark:bg-stone-900/50 border border-stone-200 dark:border-stone-700">
+              <dt class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Deadline</dt>
+              <dd class="mt-0.5 flex items-center justify-between gap-2 text-stone-900 dark:text-stone-100">
+                <span x-text="detail.deadline ? formatDate(detail.deadline) : 'Not set'"></span>
+                <span
+                  x-show="detail.deadline"
+                  :class="{
+                    'text-red-600 dark:text-red-400': deadlineTone(detail) === 'urgent',
+                    'text-amber-600 dark:text-amber-400': deadlineTone(detail) === 'soon',
+                    'text-emerald-700 dark:text-emerald-400': deadlineTone(detail) === 'calm',
+                    'text-stone-400': deadlineTone(detail) === 'muted',
+                  }"
+                  class="text-xs font-medium"
+                  x-text="deadlineLabel(detail)"
+                ></span>
+              </dd>
+            </div>
+            <div x-show="detail.event_dates">
+              <dt class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">When</dt>
+              <dd class="text-stone-900 dark:text-stone-100" x-text="detail.event_dates"></dd>
+            </div>
+            <div x-show="detail.location">
+              <dt class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Where</dt>
+              <dd class="text-stone-900 dark:text-stone-100" x-text="detail.location"></dd>
+            </div>
+            <div x-show="detail.prize" class="col-span-2">
+              <dt class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Prize</dt>
+              <dd class="text-stone-900 dark:text-stone-100" x-text="detail.prize"></dd>
+            </div>
+          </dl>
+
+          <p x-show="detail.notes" class="text-sm text-stone-700 dark:text-stone-300 whitespace-pre-line leading-relaxed" x-text="detail.notes"></p>
+
+          <template x-if="detail.url">
+            <a :href="detail.url" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 self-start text-sm text-rust dark:text-rust-light hover:text-[#9c4830] dark:hover:text-[#e08761]">
+              <span x-text="host(detail.url)"></span> &#8599;
+            </a>
+          </template>
+
+          <div>
+            <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-1.5">Status</div>
+            <div class="inline-flex p-1 rounded-full bg-stone-100 dark:bg-stone-900/60 border border-stone-200 dark:border-stone-700">
+              <template x-for="s in statuses" :key="s.key">
+                <button
+                  type="button"
+                  @click="setStatus(detail, s.key)"
+                  :aria-pressed="detail.status === s.key"
+                  :class="detail.status === s.key ? 'bg-white dark:bg-stone-700 text-stone-900 dark:text-stone-100 shadow-float' : 'text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100'"
+                  class="text-xs px-3 py-1.5 rounded-full"
+                  x-text="s.label"
+                ></button>
+              </template>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-baseline justify-between mb-1.5">
+              <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Tasks</div>
+              <span x-show="tasks.length" class="text-[11px] text-stone-400 dark:text-stone-500" x-text="tasks.filter((t) => t.status === 'pending').length + ' open'"></span>
+            </div>
+            <ul class="space-y-1" x-show="tasks.length">
+              <template x-for="t in tasks" :key="t.id">
+                <li>
+                  <a
+                    :href="t.url"
+                    title="Open this task"
+                    class="group/task flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm border border-stone-200 dark:border-stone-700 hover:border-rust dark:hover:border-rust-light bg-white/60 dark:bg-stone-900/40"
+                  >
+                    <span
+                      :class="t.status === 'pending' ? 'border-stone-300 dark:border-stone-600' : 'bg-emerald-500 border-emerald-500'"
+                      class="shrink-0 w-3.5 h-3.5 rounded-full border"
+                    ></span>
+                    <span
+                      :class="t.status === 'pending' ? 'text-stone-800 dark:text-stone-200' : 'text-stone-400 dark:text-stone-500 line-through'"
+                      class="flex-1 min-w-0 truncate"
+                      x-text="t.title"
+                    ></span>
+                    <span x-show="taskStatusLabel(t)" class="shrink-0 text-[10px] uppercase tracking-wide text-stone-400" x-text="taskStatusLabel(t)"></span>
+                    <span x-show="t.stamp" class="shrink-0 text-[10px] text-stone-400 dark:text-stone-500 tabular-nums" :title="t.stamp ? t.stamp.label + ' ' + t.stamp.full : ''" x-text="t.stamp ? t.stamp.text : ''"></span>
+                    <span class="shrink-0 text-stone-300 dark:text-stone-600 group-hover/task:text-rust dark:group-hover/task:text-rust-light">&rarr;</span>
+                  </a>
+                </li>
+              </template>
+            </ul>
+            <p x-show="!tasks.length && !tasksLoading" class="text-xs text-stone-400 dark:text-stone-500">No tasks yet. Add one and it lands on today's brief, already linked here.</p>
+            <form @submit.prevent="addTask()" class="mt-2 flex gap-2">
+              <input
+                type="text"
+                x-model="taskDraft"
+                maxlength="300"
+                placeholder="Add a task for this…"
+                class="flex-1 min-w-0 text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2.5 py-1.5 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+              >
+              <button type="submit" :disabled="!taskDraft.trim() || addingTask" class="shrink-0 text-xs px-3 py-1.5 rounded bg-rust text-white hover:bg-[#9c4830] disabled:opacity-40">Add</button>
+            </form>
+            <p x-show="taskError" x-text="taskError" class="mt-1 text-xs text-red-600 dark:text-red-400"></p>
+          </div>
+
+          <div class="mt-auto pt-2 flex flex-wrap items-center gap-2">
+            <button type="button" @click="openComposer(detail)" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100">Edit</button>
+            <button type="button" @click="sendToMap(detail)" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100">Add to Map</button>
+            <a :href="`/competitions/${detail.id}`" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100">Full details</a>
+            <button type="button" @click="remove(detail)" class="ml-auto text-xs px-3 py-1.5 rounded text-stone-400 hover:text-red-600 dark:hover:text-red-400">Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Composer -->
+  <template x-if="composer.open">
+    <div class="fixed inset-0 z-50 bg-black/45 flex items-end sm:items-center justify-center p-0 sm:p-6" @click.self="closeComposer()">
+      <form
+        @submit.prevent="save()"
+        class="comp-sheet-enter shadow-float w-full sm:max-w-2xl max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-stone-200 dark:border-stone-700 bg-white/95 dark:bg-stone-800/95 backdrop-blur-md p-5 sm:p-6"
+      >
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-serif text-xl text-stone-900 dark:text-stone-100" x-text="composer.editingId ? 'Edit' : 'Save a competition'"></h2>
+          <button type="button" @click="closeComposer()" aria-label="Close" class="w-8 h-8 rounded-full flex items-center justify-center text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-100 dark:hover:bg-stone-700">&times;</button>
+        </div>
+
+        <template x-if="!composer.editingId && boardCards.length">
+          <div class="mb-4">
+            <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Already on your Map</div>
+            <p class="text-xs text-stone-400 dark:text-stone-500 mt-0.5">Pick one to save it here — its details fill in and the Map card gets linked, no duplicate.</p>
+            <div class="mt-2 flex flex-wrap gap-1.5">
+              <template x-for="card in boardCards" :key="card.id">
+                <button
+                  type="button"
+                  @click="pickBoardCard(card)"
+                  :aria-pressed="composer.fromCardId === card.id"
+                  :class="composer.fromCardId === card.id ? 'belongs-chip' : 'border-stone-300 dark:border-stone-600 text-stone-700 dark:text-stone-200 hover:border-violet-400 dark:hover:border-violet-500'"
+                  class="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border"
+                >
+                  <span class="text-[9px] uppercase tracking-wide opacity-70" x-text="card.kind"></span>
+                  <span x-text="card.title"></span>
+                  <span class="text-[10px] opacity-60" x-text="'· ' + card.board_name"></span>
+                </button>
+              </template>
+            </div>
+            <p x-show="composer.fromCardId" class="text-xs text-violet-700 dark:text-violet-300 mt-1.5">Saving will link this Map card. Click it again to start from scratch instead.</p>
+          </div>
+        </template>
+
+        <div
+          @dragover.prevent="composer.dragging = true"
+          @dragleave.self="composer.dragging = false"
+          @drop.prevent="composer.dragging = false; setShot($event.dataTransfer.files[0])"
+          :class="composer.dragging ? 'is-over border-rust dark:border-rust-light bg-rust/5' : 'border-stone-300 dark:border-stone-600'"
+          class="comp-drop relative rounded-xl border-2 border-dashed overflow-hidden"
+        >
+          <template x-if="composer.shotPreview || (composer.existingShot && !composer.removeShot)">
+            <div class="comp-shot-in relative aspect-[16/9] bg-stone-100 dark:bg-stone-900">
+              <img :src="composer.shotPreview || composer.existingShot" alt="Screenshot preview" class="w-full h-full object-contain">
+              <button type="button" @click="clearShot()" class="absolute top-2 right-2 text-xs px-2.5 py-1 rounded-full bg-black/55 text-white hover:bg-black/70">Remove</button>
+            </div>
+          </template>
+          <template x-if="!(composer.shotPreview || (composer.existingShot && !composer.removeShot))">
+            <label class="flex flex-col items-center justify-center gap-2 py-9 px-4 text-center cursor-pointer">
+              <svg class="text-stone-400" xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
+              <span class="text-sm text-stone-700 dark:text-stone-200">Paste a screenshot <span class="text-stone-400">(Ctrl+V)</span></span>
+              <span class="text-xs text-stone-400 dark:text-stone-500">or drop one here, or <span class="text-rust dark:text-rust-light underline">browse</span></span>
+              <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" class="sr-only" @change="setShot($event.target.files[0]); $event.target.value = ''">
+            </label>
+          </template>
+        </div>
+
+        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label class="sm:col-span-2 block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Name</span>
+            <input x-ref="composerTitle" type="text" x-model="composer.fields.title" required maxlength="200" placeholder="e.g. NASA Space Apps Challenge" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          </label>
+
+          <div class="sm:col-span-2">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Type</span>
+            <div class="mt-1 flex flex-wrap gap-1.5">
+              <template x-for="k in kinds" :key="k">
+                <button
+                  type="button"
+                  @click="composer.fields.kind = k"
+                  :aria-pressed="composer.fields.kind === k"
+                  :class="composer.fields.kind === k ? 'bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 border-transparent' : 'text-stone-600 dark:text-stone-300 border-stone-300 dark:border-stone-600 hover:border-stone-400'"
+                  class="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border"
+                >
+                  <span x-html="icon(k, 13)"></span>
+                  <span x-text="kindLabel(k)"></span>
+                </button>
+              </template>
+            </div>
+          </div>
+
+          <label class="sm:col-span-2 block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Link</span>
+            <input type="text" inputmode="url" x-model="composer.fields.url" maxlength="2000" placeholder="https://…" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          </label>
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Deadline</span>
+            <input type="date" x-model="composer.fields.deadline" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          </label>
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Organizer</span>
+            <input type="text" x-model="composer.fields.organizer" maxlength="120" placeholder="Who runs it" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          </label>
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">When</span>
+            <input type="text" x-model="composer.fields.event_dates" maxlength="80" placeholder="e.g. Nov 13–15" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          </label>
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Where</span>
+            <input type="text" x-model="composer.fields.location" maxlength="80" placeholder="Online, Istanbul…" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          </label>
+          <label class="sm:col-span-2 block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Prize</span>
+            <input type="text" x-model="composer.fields.prize" maxlength="80" placeholder="e.g. $10,000 + mentorship" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          </label>
+          <label class="sm:col-span-2 block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Notes</span>
+            <textarea x-model="composer.fields.notes" rows="3" maxlength="4000" placeholder="Why it caught your eye, team ideas, requirements…" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-y"></textarea>
+          </label>
+        </div>
+
+        <p x-show="composer.error" x-text="composer.error" class="mt-3 text-sm text-red-600 dark:text-red-400"></p>
+
+        <div class="mt-5 flex items-center justify-end gap-2">
+          <button type="button" @click="closeComposer()" class="text-sm px-4 py-2 rounded-full text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">Cancel</button>
+          <button
+            type="submit"
+            :disabled="composer.saving"
+            class="text-sm px-5 py-2 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-60"
+            x-text="composer.saving ? 'Saving…' : (composer.editingId ? 'Save changes' : 'Save')"
+          ></button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <!-- Full-size screenshot -->
+  <template x-if="viewer">
+    <div class="comp-viewer fixed inset-0 z-[60] bg-black/85 flex items-center justify-center p-6" @click="viewer = null">
+      <img :src="viewer" alt="" class="max-w-full max-h-[90vh] rounded-lg shadow-2xl">
+    </div>
+  </template>
+</main>
+{% endblock %}

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Lane Labels{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Lane Labels</h1>
+    <a href="/settings" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to settings</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div
+    x-data="{
+      labels: {{ lane_labels | tojson }},
+      saved: {{ lane_labels | tojson }},
+      errors: {},
+      save(lane) {
+        const value = this.labels[lane];
+        fetch(`/settings/lane-labels/${lane}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label: value }),
+        }).then(async r => {
+          if (!r.ok) { this.errors[lane] = 'Could not save — try again.'; return; }
+          const data = await r.json();
+          delete this.errors[lane];
+          this.labels[lane] = data.label;
+          this.saved[lane] = data.label;
+        });
+      },
+      reset(lane) {
+        this.labels[lane] = '';
+        this.save(lane);
+      },
+    }"
+    class="max-w-2xl space-y-3"
+  >
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3">
+      <div class="font-serif text-base text-stone-900 dark:text-stone-100 mb-1">Rename lanes</div>
+      <p class="text-xs text-stone-500 dark:text-stone-400 mb-3">
+        Changes the display text everywhere it's shown — the brief, history, chat replies — without
+        touching how items are triaged or categorized underneath.
+      </p>
+      <div class="space-y-2">
+        {% for lane in lanes %}
+        <div class="flex items-center gap-2">
+          <span class="w-28 shrink-0 text-xs text-stone-500 dark:text-stone-400 font-mono">{{ lane }}</span>
+          <input
+            type="text"
+            x-model="labels['{{ lane }}']"
+            @keydown.enter="save('{{ lane }}')"
+            class="min-w-0 flex-1 text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+          >
+          <button
+            type="button"
+            @click="save('{{ lane }}')"
+            :disabled="labels['{{ lane }}'] === saved['{{ lane }}']"
+            class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+          >Save</button>
+          <button
+            type="button"
+            @click="reset('{{ lane }}')"
+            class="text-xs px-2 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 whitespace-nowrap"
+          >Reset</button>
+        </div>
+        <p x-show="errors['{{ lane }}']" x-text="errors['{{ lane }}']" class="text-xs text-red-600 dark:text-red-400"></p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</main>
+{% endblock %}

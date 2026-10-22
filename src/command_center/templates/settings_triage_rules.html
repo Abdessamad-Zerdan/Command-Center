@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Triage Rules{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Triage Rules</h1>
+    <a href="/settings" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to settings</a>
+  </div>
+</header>
+
+<script>
+  // Kept out of the x-data attribute below: tojson's double quotes would
+  // end that double-quoted attribute early.
+  window.TRIAGE_LANE_LABELS = {{ lane_labels | tojson }};
+  window.TRIAGE_RULES = {{ rules | tojson }};
+</script>
+<main class="px-4 sm:px-6 py-6">
+  <div
+    x-data="{
+      field: 'title',
+      matchValue: '',
+      lane: 'urgent',
+      error: '',
+      rules: window.TRIAGE_RULES,
+      fieldLabel(field) {
+        return { title: 'Title contains', sender: 'Sender contains', category: 'Gmail category is', bulk: 'Bulk mail (unsubscribe link, outside Primary)' }[field] || field;
+      },
+      laneLabel(lane) {
+        return lane === 'skip' ? 'Skip (drop it)' : (window.TRIAGE_LANE_LABELS[lane] || lane);
+      },
+      add() {
+        this.error = '';
+        if (this.field === 'bulk') this.matchValue = 'yes';
+        fetch('/settings/triage-rules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ field: this.field, match_value: this.matchValue, lane: this.lane }),
+        }).then(async r => {
+          const data = await r.json();
+          if (!r.ok) { this.error = (data.errors && Object.values(data.errors)[0]) || 'Could not add rule.'; return; }
+          // User rules are checked before the built-in ones — keep the list in that order.
+          const firstBuiltin = this.rules.findIndex(r2 => r2.builtin);
+          const rule = { id: data.id, field: this.field, match_value: this.matchValue, lane: this.lane, enabled: 1, builtin: 0 };
+          if (firstBuiltin === -1) this.rules.push(rule); else this.rules.splice(firstBuiltin, 0, rule);
+          this.matchValue = '';
+        });
+      },
+      toggle(rule) {
+        const value = !rule.enabled;
+        fetch(`/settings/triage-rules/${rule.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: value }),
+        }).then(r => { if (r.ok) { rule.enabled = value ? 1 : 0; } });
+      },
+      remove(rule) {
+        if (!confirm('Delete this rule?')) return;
+        fetch(`/settings/triage-rules/${rule.id}`, { method: 'DELETE' }).then(r => {
+          if (r.ok) { this.rules = this.rules.filter(r2 => r2.id !== rule.id); }
+        });
+      },
+    }"
+    class="max-w-2xl space-y-3"
+  >
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3">
+      <div class="font-serif text-base text-stone-900 dark:text-stone-100 mb-1">Add rule</div>
+      <p class="text-xs text-stone-500 dark:text-stone-400 mb-2">
+        The first matching enabled rule wins (yours before the built-in ones). Rules sending mail to
+        <span class="font-medium">Reading</span> or <span class="font-medium">Skip</span> apply before the AI sees it —
+        no summary, no tokens. Rules naming a work lane override the AI's lane after it runs.
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <select x-model="field" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          <option value="title">Title contains</option>
+          <option value="sender">Sender contains</option>
+          <option value="category">Gmail category is</option>
+          <option value="bulk">Bulk mail (unsubscribe link, outside Primary)</option>
+        </select>
+        <input x-show="field === 'title' || field === 'sender'" type="text" x-model="matchValue" placeholder="text to match"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 flex-1 min-w-[10rem] focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <select x-show="field === 'category'" x-model="matchValue" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          <option value="">Pick a category…</option>
+          {% for c in categories %}
+          <option value="{{ c }}">{{ c | capitalize }}</option>
+          {% endfor %}
+        </select>
+        <span class="text-xs text-stone-400 dark:text-stone-500">&#8594;</span>
+        <select x-model="lane" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          {% for l in lanes %}
+          <option value="{{ l }}">{{ lane_labels[l] }}</option>
+          {% endfor %}
+          <option value="skip">Skip (drop it)</option>
+        </select>
+        <button @click="add()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Add rule
+        </button>
+      </div>
+      <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-2"></p>
+    </div>
+
+    {% if patterns %}
+    <div class="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-4 py-3">
+      <div class="font-serif text-base text-stone-900 dark:text-stone-100 mb-1">Suggested rules</div>
+      <p class="text-xs text-stone-600 dark:text-stone-300 mb-2">
+        You've manually corrected these the same way more than once — a rule below might catch it next time.
+      </p>
+      <ul class="text-xs text-stone-700 dark:text-stone-300 space-y-1">
+        {% for p in patterns %}
+        <li>
+          Moved {{ p.count }}&times; from <span class="font-medium">{{ lane_labels.get(p.from_lane, p.from_lane) }}</span>
+          to <span class="font-medium">{{ lane_labels.get(p.to_lane, p.to_lane) }}</span>
+          ({{ p.source }}, e.g. &ldquo;{{ p.example_title }}&rdquo;)
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <div class="rounded-lg bg-stone-100 dark:bg-stone-800/50 p-4">
+      <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-2">Your rules</div>
+      <template x-if="rules.length === 0">
+        <p class="text-xs text-stone-400 dark:text-stone-500 italic">No rules yet.</p>
+      </template>
+      <template x-for="rule in rules" :key="rule.id">
+        <div class="flex items-center justify-between gap-3 py-1.5 border-t border-stone-200 dark:border-stone-700 first:border-t-0 text-xs">
+          <div class="min-w-0 text-stone-700 dark:text-stone-300">
+            <span x-text="fieldLabel(rule.field)"></span>
+            <span x-show="rule.field !== 'bulk'" class="font-medium text-stone-900 dark:text-stone-100" x-text="'‘' + rule.match_value + '’'"></span>
+            &#8594; <span x-text="laneLabel(rule.lane)"></span>
+            <span x-show="rule.builtin" class="ml-1 text-[10px] uppercase tracking-wide px-1 py-0.5 rounded bg-stone-200 dark:bg-stone-700 text-stone-500 dark:text-stone-400">Built-in</span>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <label class="flex items-center gap-1">
+              <input type="checkbox" :checked="rule.enabled" @change="toggle(rule)" class="accent-rust">
+              <span class="text-stone-500 dark:text-stone-400">Enabled</span>
+            </label>
+            <button @click="remove(rule)" class="text-stone-400 dark:text-stone-500 hover:text-red-600 dark:hover:text-red-400">Delete</button>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3">
+      <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-2">Recent corrections</div>
+      {% if corrections %}
+      <div class="space-y-1.5 text-xs">
+        {% for c in corrections %}
+        <div class="flex items-center justify-between gap-3 py-1 border-t border-stone-200 dark:border-stone-700 first:border-t-0">
+          <div class="min-w-0 truncate text-stone-700 dark:text-stone-300">{{ c.title }}</div>
+          <div class="shrink-0 text-stone-500 dark:text-stone-400 whitespace-nowrap">
+            {{ lane_labels.get(c.from_lane, c.from_lane) }} &#8594; {{ lane_labels.get(c.to_lane, c.to_lane) }}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-xs text-stone-400 dark:text-stone-500 italic">No corrections yet — drag an item to a different lane to record one.</p>
+      {% endif %}
+    </div>
+
+  </div>
+</main>
+{% endblock %}

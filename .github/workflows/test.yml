@@ -1,0 +1,32 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Check the prebuilt CSS is up to date
+        # static/css/app.css is built by Tailwind from the templates; a
+        # template change without `uv run make-css` would ship missing styles.
+        run: uv run make-css --check
+
+      - name: Run tests
+        run: uv run pytest -q

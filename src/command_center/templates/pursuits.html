@@ -1,0 +1,633 @@
+{% extends "base.html" %}
+{% block title %}Command Center — {{ page.title }}{% endblock %}
+{% block content %}
+{# /research and /targets — the Competitions page's layout (grid of cards,
+   popup grown out of the card, composer sheet) for research topics and
+   targets. pursuits/router.py's PAGE holds the per-kind copy. #}
+<style>
+  /* Entrance is a short rise only — never from invisible, so the cards
+     are readable from the first frame (motion must not gate content). */
+  .pur-enter { animation: purIn 260ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+  @keyframes purIn { from { transform: translateY(6px); } }
+  .pur-urgent-dot { animation: purPulse 1.6s ease-in-out infinite; }
+  @keyframes purPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgb(239 68 68 / 0.55); }
+    50% { box-shadow: 0 0 0 5px rgb(239 68 68 / 0); }
+  }
+  .pur-drop { transition: border-color 200ms ease, background-color 200ms ease, transform 200ms ease; }
+  .pur-drop.is-over { transform: scale(1.01); }
+  .pur-sheet-enter { animation: purSheetIn 460ms cubic-bezier(0.2, 0.9, 0.1, 1) both; }
+  @keyframes purSheetIn { from { opacity: 0; transform: translateY(28px) scale(0.98); } }
+  @media (prefers-reduced-motion: reduce) {
+    .pur-enter, .pur-urgent-dot, .pur-sheet-enter { animation: none; }
+  }
+</style>
+
+<script>
+  // Static, trusted icon markup (never user data) — rendered with x-html.
+  const PUR_ICONS = {
+    research: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><path d="M8.5 11h5M11 8.5v5"/>',
+    target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/>',
+  };
+
+  function pursuitsBoard(kind, initial, statuses, today) {
+    const emptyFields = () => ({ title: '', notes: '', target_date: '', url: '' });
+    return {
+      kind: kind,
+      items: initial,
+      statuses: statuses,
+      today: today,
+      filter: 'all',
+      query: '',
+
+      detail: null,
+      origin: null,
+      closingDetail: false,
+      _closeAnims: null,
+
+      tasks: [],
+      tasksLoading: false,
+      taskDraft: '',
+      taskError: '',
+      addingTask: false,
+
+      composer: {
+        open: false, editingId: null, fields: emptyFields(),
+        cover: null, coverPreview: null, existingCover: null, removeCover: false,
+        dragging: false, saving: false, error: '',
+      },
+
+      // ?open=ID — from a task chip, a Map card's "Open in …", or Full
+      // details' back link — opens that entry, grown out of its card.
+      init() {
+        const openId = parseInt(new URLSearchParams(window.location.search).get('open'), 10);
+        if (!openId) return;
+        history.replaceState(null, '', window.location.pathname);
+        const p = this.items.find((x) => x.id === openId);
+        if (!p) return;
+        setTimeout(() => {
+          const card = document.querySelector(`[data-pursuit-id="${openId}"]`);
+          if (card) card.scrollIntoView({ block: 'center' });
+          this.openDetail(p, card);
+        }, 350);
+      },
+
+      // --- presentation ---------------------------------------------------
+      icon(size = 16) {
+        return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PUR_ICONS[this.kind]}</svg>`;
+      },
+      // Same title-hued gradient as competitions, so every entry gets its
+      // own colour and keeps it.
+      coverStyle(p) {
+        let h = 0;
+        for (const ch of p.title) h = (h * 31 + ch.charCodeAt(0)) % 360;
+        return `background: radial-gradient(120% 90% at 20% 15%, hsl(${h} 70% 78%) 0%, transparent 60%), linear-gradient(135deg, hsl(${h} 55% 62%) 0%, hsl(${(h + 45) % 360} 50% 42%) 100%);`;
+      },
+      statusLabel(key) {
+        const s = this.statuses.find((x) => x.key === key);
+        return s ? s.label : key;
+      },
+      get finalStatus() { return this.statuses[this.statuses.length - 1].key; },
+      isFinished(p) { return p.status === this.finalStatus; },
+      statusTone(p) {
+        const i = this.statuses.findIndex((s) => s.key === p.status);
+        if (i === this.statuses.length - 1) return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300';
+        if (i === 1) return 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300';
+        return 'bg-stone-100 text-stone-600 dark:bg-stone-700 dark:text-stone-300';
+      },
+      daysLeft(p) {
+        if (!p.target_date) return null;
+        return Math.round((Date.parse(p.target_date) - Date.parse(this.today)) / 86400000);
+      },
+      dateLabel(p) {
+        if (this.isFinished(p)) return this.statusLabel(p.status);
+        const d = this.daysLeft(p);
+        if (d === null) return 'No date';
+        if (d < 0) return `${-d} day${d === -1 ? '' : 's'} over`;
+        if (d === 0) return 'Due today';
+        if (d === 1) return '1 day left';
+        if (d <= 60) return `${d} days left`;
+        return 'By ' + this.formatDate(p.target_date);
+      },
+      dateTone(p) {
+        if (this.isFinished(p)) return 'done';
+        const d = this.daysLeft(p);
+        if (d === null) return 'muted';
+        if (d < 0 || d <= 3) return 'urgent';
+        if (d <= 14) return 'soon';
+        return 'calm';
+      },
+      formatDate(iso) {
+        if (!iso) return '';
+        return new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      },
+      host(url) {
+        try { return new URL(url).hostname.replace(/^www\./, ''); } catch (e) { return url; }
+      },
+
+      // --- list -------------------------------------------------------------
+      count(status) {
+        return status === 'all' ? this.items.length : this.items.filter((p) => p.status === status).length;
+      },
+      // In play first (soonest date on top), finished ones sink.
+      get visible() {
+        const q = this.query.trim().toLowerCase();
+        return this.items
+          .filter((p) => this.filter === 'all' || p.status === this.filter)
+          .filter((p) => !q || [p.title, p.notes].some((v) => v && v.toLowerCase().includes(q)))
+          .sort((a, b) => (this.isFinished(a) - this.isFinished(b))
+            || (a.target_date || '9999').localeCompare(b.target_date || '9999') || b.id - a.id);
+      },
+      _replace(updated) {
+        this.items = this.items.map((p) => (p.id === updated.id ? updated : p));
+        if (this.detail && this.detail.id === updated.id) this.detail = updated;
+      },
+      _json(response) {
+        return response.json().catch(() => ({})).then((data) => {
+          if (!response.ok) throw new Error(data.detail || 'Something went wrong.');
+          return data;
+        });
+      },
+
+      // --- tasks --------------------------------------------------------------
+      loadTasks(id) {
+        this.tasks = []; this.taskDraft = ''; this.taskError = ''; this.tasksLoading = true;
+        fetch(`/pursuits/${id}/tasks`)
+          .then((r) => this._json(r))
+          .then((tasks) => { if (this.detail && this.detail.id === id) this.tasks = tasks; })
+          .catch(() => {})
+          .finally(() => { this.tasksLoading = false; });
+      },
+      _setOpenCount(id) {
+        const n = this.tasks.filter((t) => t.status === 'pending').length;
+        this.items.forEach((p) => { if (p.id === id) p.open_tasks = n; });
+        if (this.detail && this.detail.id === id) this.detail.open_tasks = n;
+      },
+      addTask() {
+        const title = this.taskDraft.trim();
+        if (!title || this.addingTask || !this.detail) return;
+        const id = this.detail.id;
+        this.addingTask = true; this.taskError = '';
+        fetch(`/pursuits/${id}/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        }).then((r) => this._json(r))
+          .then((task) => {
+            this.tasks.unshift(task);
+            this.taskDraft = '';
+            this._setOpenCount(id);
+            this.$store.toast.show('Added to today\'s brief');
+          })
+          .catch((e) => { this.taskError = e.message; })
+          .finally(() => { this.addingTask = false; });
+      },
+      toggleTask(t) {
+        const next = t.status === 'done' ? 'pending' : 'done';
+        const id = this.detail && this.detail.id;
+        fetch(`/items/${t.id}/${next === 'done' ? 'done' : 'reopen'}`, { method: 'POST' })
+          .then((r) => { if (r.ok) { t.status = next; if (id) this._setOpenCount(id); } });
+      },
+      taskStatusLabel(t) {
+        return { done: 'Done', dismissed: 'Dismissed', snoozed: 'Snoozed' }[t.status] || '';
+      },
+
+      // --- entry actions --------------------------------------------------------
+      setStatus(p, status) {
+        fetch(`/pursuits/${p.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status }),
+        }).then((r) => this._json(r)).then((updated) => this._replace(updated))
+          .catch((e) => this.$store.toast.show(e.message));
+      },
+      sendToMap(p) {
+        fetch(`/pursuits/${p.id}/to-map`, { method: 'POST' })
+          .then((r) => this._json(r))
+          .then((data) => {
+            p.map_node_id = data.node_id;
+            if (this.detail && this.detail.id === p.id) this.detail.map_node_id = data.node_id;
+            this.$store.toast.show(data.existed ? 'Already on your Map' : 'Added to your Map');
+          })
+          .catch((e) => this.$store.toast.show(e.message));
+      },
+      remove(p) {
+        const onMap = p.map_node_id ? ' Its card on the Map goes too.' : '';
+        if (!window.confirm(`Delete "${p.title}"?${onMap} Its tasks stay. This can't be undone.`)) return;
+        fetch(`/pursuits/${p.id}`, { method: 'DELETE' })
+          .then((r) => this._json(r))
+          .then(() => {
+            this._finishCloseDetail();
+            this.items = this.items.filter((x) => x.id !== p.id);
+          })
+          .catch((e) => this.$store.toast.show(e.message));
+      },
+
+      // --- detail: grows out of the card it was opened from -----------------------
+      _box(from, to) {
+        const dx = (from.left + from.width / 2) - (to.left + to.width / 2);
+        const dy = (from.top + from.height / 2) - (to.top + to.height / 2);
+        return `translate(${dx}px, ${dy}px) scale(${from.width / to.width}, ${from.height / to.height})`;
+      },
+      openDetail(p, el) {
+        if (this.closingDetail) this._finishCloseDetail();
+        this.detail = p;
+        this.origin = el;
+        this.loadTasks(p.id);
+        this.$nextTick(() => {
+          const panel = this.$refs.dPanel;
+          if (!panel || (window.reducedMotion && window.reducedMotion.matches)) return;
+          this.$refs.dBackdrop.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 320, easing: 'ease-out' });
+          const to = panel.getBoundingClientRect();
+          let start = 'translateY(48px) scale(0.96)';
+          if (el && el.isConnected) {
+            start = this._box(el.getBoundingClientRect(), to);
+            el.style.visibility = 'hidden';
+          }
+          panel.animate([{ transform: start, opacity: 0.9 }, { transform: 'none', opacity: 1 }], { duration: 560, easing: 'cubic-bezier(0.2, 0.9, 0.1, 1)' });
+          this.$refs.dContent.animate(
+            [{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }],
+            { duration: 420, delay: 220, easing: 'cubic-bezier(0.22, 1, 0.36, 1)', fill: 'backwards' },
+          );
+        });
+      },
+      closeDetail() {
+        if (!this.detail || this.closingDetail) return;
+        const panel = this.$refs.dPanel;
+        if (!panel || (window.reducedMotion && window.reducedMotion.matches)) { this._finishCloseDetail(); return; }
+        this.closingDetail = true;
+        const from = panel.getBoundingClientRect();
+        const target = this.origin && this.origin.isConnected ? this.origin.getBoundingClientRect() : null;
+        const home = target && target.width > 0 && target.bottom > 0 && target.top < window.innerHeight;
+        const end = home ? this._box(target, from) : 'translateY(36px) scale(0.96)';
+        const anim = panel.animate([{ transform: 'none', opacity: 1 }, { transform: end, opacity: home ? 0.95 : 0 }], { duration: 440, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', fill: 'forwards' });
+        this._closeAnims = [
+          anim,
+          this.$refs.dContent.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 150, fill: 'forwards' }),
+          this.$refs.dBackdrop.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 380, easing: 'ease-in', fill: 'forwards' }),
+        ];
+        anim.onfinish = () => this._finishCloseDetail();
+      },
+      _finishCloseDetail() {
+        (this._closeAnims || []).forEach((a) => a.cancel());
+        this._closeAnims = null;
+        if (this.origin) this.origin.style.visibility = '';
+        this.origin = null;
+        this.detail = null;
+        this.closingDetail = false;
+      },
+
+      // --- composer: new or edit ------------------------------------------------
+      openComposer(p = null, coverFile = null) {
+        const c = this.composer;
+        c.editingId = p ? p.id : null;
+        c.fields = emptyFields();
+        if (p) for (const key of Object.keys(c.fields)) c.fields[key] = p[key] || '';
+        c.existingCover = p ? p.cover_url : null;
+        c.removeCover = false; c.error = ''; c.saving = false;
+        this.setCover(null);
+        if (coverFile) this.setCover(coverFile);
+        c.open = true;
+        this.$nextTick(() => { if (this.$refs.composerTitle) this.$refs.composerTitle.focus(); });
+      },
+      closeComposer() { this.setCover(null); this.composer.open = false; },
+      setCover(file) {
+        const c = this.composer;
+        if (c.coverPreview) URL.revokeObjectURL(c.coverPreview);
+        c.cover = null; c.coverPreview = null;
+        if (!file) return;
+        if (!file.type.startsWith('image/')) { c.error = 'That isn\'t an image.'; return; }
+        c.error = ''; c.cover = file; c.coverPreview = URL.createObjectURL(file); c.removeCover = false;
+      },
+      clearCover() {
+        this.setCover(null);
+        if (this.composer.existingCover) this.composer.removeCover = true;
+      },
+      // Paste an image anywhere on the page: the composer opens with it.
+      onPaste(event) {
+        const files = event.clipboardData ? Array.from(event.clipboardData.files).filter((f) => f.type.startsWith('image/')) : [];
+        if (!files.length || this.detail) return;
+        event.preventDefault();
+        if (this.composer.open) this.setCover(files[0]);
+        else this.openComposer(null, files[0]);
+      },
+      onKey(event) {
+        if (event.key !== 'Escape') return;
+        if (this.composer.open) this.closeComposer();
+        else if (this.detail) this.closeDetail();
+      },
+      async save() {
+        const c = this.composer;
+        if (c.saving) return;
+        if (!c.fields.title.trim()) { c.error = 'Give it a name.'; return; }
+        c.saving = true; c.error = '';
+        try {
+          const editing = c.editingId !== null;
+          let saved = await fetch(editing ? `/pursuits/${c.editingId}` : '/pursuits', {
+            method: editing ? 'PATCH' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(editing ? c.fields : { ...c.fields, kind: this.kind }),
+          }).then((r) => this._json(r));
+          if (c.cover) {
+            const body = new FormData();
+            body.append('file', c.cover);
+            saved = await fetch(`/pursuits/${saved.id}/cover`, { method: 'POST', body }).then((r) => this._json(r));
+          } else if (editing && c.removeCover) {
+            saved = await fetch(`/pursuits/${saved.id}/cover`, { method: 'DELETE' }).then((r) => this._json(r));
+          }
+          if (editing) this._replace(saved);
+          else this.items = [saved, ...this.items];
+          if (!editing && this.filter !== 'all' && this.filter !== saved.status) this.filter = 'all';
+          this.closeComposer();
+          this.$store.toast.show(editing ? 'Saved changes' : 'Added');
+        } catch (e) {
+          c.error = e.message;
+        } finally {
+          c.saving = false;
+        }
+      },
+    };
+  }
+</script>
+
+<header class="frost-header border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">{{ page.title }}</h1>
+  </div>
+</header>
+{% include "partials/pursuits_tabs.html" %}
+
+<main
+  x-data='pursuitsBoard({{ kind | tojson }}, {{ items | tojson }}, {{ statuses | tojson }}, {{ today | tojson }})'
+  @paste.window="onPaste($event)"
+  @keydown.window="onKey($event)"
+  class="px-4 sm:px-6 py-6 max-w-7xl"
+>
+  <section class="flex flex-wrap items-end justify-between gap-4 mb-5" data-reveal>
+    <div>
+      <h2 class="font-serif text-2xl sm:text-3xl text-stone-900 dark:text-stone-100">{{ page.heading }}</h2>
+      <p class="mt-1 text-sm text-stone-500 dark:text-stone-400 max-w-xl">{{ page.blurb }}</p>
+    </div>
+    <button
+      type="button"
+      @click="openComposer()"
+      class="card-lift inline-flex items-center gap-2 text-sm px-4 py-2 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      {{ page.add_label }}
+    </button>
+  </section>
+
+  <section class="flex flex-wrap items-center justify-between gap-3 mb-6" data-reveal>
+    <div class="flex flex-wrap gap-1.5" role="tablist" aria-label="Filter by status">
+      <template x-for="tab in [{ key: 'all', label: 'All' }, ...statuses]" :key="tab.key">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="filter === tab.key"
+          @click="filter = tab.key"
+          :class="filter === tab.key
+            ? 'bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 border-transparent'
+            : 'bg-white/60 dark:bg-stone-800/50 text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700 hover:border-stone-400 dark:hover:border-stone-500'"
+          class="text-xs px-3 py-1.5 rounded-full border backdrop-blur-sm"
+        >
+          <span x-text="tab.label"></span>
+          <span class="ml-1 tabular-nums opacity-60" x-text="count(tab.key)"></span>
+        </button>
+      </template>
+    </div>
+    <label class="relative">
+      <span class="sr-only">Search</span>
+      <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="search" x-model="query" placeholder="Search…" class="w-60 text-xs bg-white/70 dark:bg-stone-800/60 backdrop-blur-sm border border-stone-200 dark:border-stone-700 rounded-full pl-8 pr-3 py-1.5 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+    </label>
+  </section>
+
+  <div class="grid gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+    <template x-for="(p, i) in visible" :key="p.id">
+      <article
+        @click="openDetail(p, $el)"
+        :data-pursuit-id="p.id"
+        :style="`animation-delay: ${Math.min(i, 12) * 20}ms`"
+        :class="isFinished(p) ? 'opacity-70' : ''"
+        class="pur-enter card-lift group relative flex flex-col rounded-2xl overflow-hidden border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 cursor-pointer"
+      >
+        <div class="relative aspect-[16/10] overflow-hidden bg-stone-100 dark:bg-stone-900">
+          <template x-if="p.cover_url">
+            <img :src="p.cover_url" alt="" loading="lazy" class="w-full h-full object-cover transition-transform duration-[900ms] ease-out group-hover:scale-[1.05]">
+          </template>
+          <template x-if="!p.cover_url">
+            <div class="w-full h-full flex items-center justify-center text-white/45 transition-transform duration-[900ms] ease-out group-hover:scale-[1.05]" :style="coverStyle(p)" x-html="icon(56)"></div>
+          </template>
+          <div class="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/55 via-black/10 to-transparent pointer-events-none"></div>
+
+          <span class="absolute top-2.5 left-2.5 text-[10px] font-medium uppercase tracking-wide px-2 py-1 rounded-full backdrop-blur-sm" :class="statusTone(p)" x-text="statusLabel(p.status)"></span>
+          <span x-show="p.map_node_id" title="On the Map" class="absolute top-2.5 right-2.5 text-[10px] font-medium uppercase tracking-wide px-2 py-1 rounded-full bg-black/30 text-white backdrop-blur-sm">On map</span>
+
+          <span class="absolute bottom-2.5 left-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-full bg-black/35 text-white backdrop-blur-md">
+            <span class="w-1.5 h-1.5 rounded-full" :class="{
+              'bg-red-500 pur-urgent-dot': dateTone(p) === 'urgent',
+              'bg-amber-400': dateTone(p) === 'soon',
+              'bg-emerald-400': dateTone(p) === 'calm' || dateTone(p) === 'done',
+              'bg-stone-400': dateTone(p) === 'muted',
+            }"></span>
+            <span x-text="dateLabel(p)"></span>
+          </span>
+        </div>
+
+        <div class="flex-1 flex flex-col p-3.5">
+          <h3 class="font-serif text-base leading-snug text-stone-900 dark:text-stone-100 line-clamp-2" x-text="p.title"></h3>
+          <p class="mt-1 text-xs text-stone-500 dark:text-stone-400 line-clamp-2" x-show="p.notes" x-text="p.notes"></p>
+          <p class="mt-1 inline-flex items-center gap-1 text-[10.5px] text-stone-400 dark:text-stone-500 tabular-nums" x-show="p.created_at" :title="'Added ' + stampFull(p.created_at)"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span x-text="'Added ' + stamp(p.created_at)"></span></p>
+          <div class="mt-auto pt-3 flex items-center justify-between gap-2 text-xs">
+            <span x-show="p.open_tasks > 0" :title="p.open_tasks + (p.open_tasks === 1 ? ' open task' : ' open tasks')" class="shrink-0 inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full bg-rust/10 text-rust dark:text-rust-light">
+              <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+              <span x-text="p.open_tasks"></span>
+            </span>
+            <span x-show="p.url" class="ml-auto text-stone-400 dark:text-stone-500 truncate" x-text="p.url ? host(p.url) : ''"></span>
+          </div>
+        </div>
+      </article>
+    </template>
+  </div>
+
+  <template x-if="items.length === 0">
+    <div class="pur-enter mt-6 flex flex-col items-center text-center py-16 px-6 rounded-2xl border border-dashed border-stone-300 dark:border-stone-700 bg-white/40 dark:bg-stone-800/30 backdrop-blur-sm">
+      <div class="text-stone-300 dark:text-stone-600 mb-4" x-html="icon(44)"></div>
+      <h3 class="font-serif text-xl text-stone-900 dark:text-stone-100">{{ page.empty_title }}</h3>
+      <p class="mt-2 text-sm text-stone-500 dark:text-stone-400 max-w-sm">{{ page.empty_text }}</p>
+      <button type="button" @click="openComposer()" class="mt-5 text-sm text-rust dark:text-rust-light hover:underline">{{ page.add_label }}</button>
+    </div>
+  </template>
+  <template x-if="items.length > 0 && visible.length === 0">
+    <p class="mt-10 text-center text-sm text-stone-500 dark:text-stone-400">Nothing matches — try another filter or search.</p>
+  </template>
+
+  <!-- Detail -->
+  <template x-if="detail">
+    <div x-ref="dBackdrop" class="fixed inset-0 z-40 bg-black/45 flex items-center justify-center p-4 sm:p-8" @click.self="closeDetail()">
+      <div x-ref="dPanel" class="shadow-float w-full max-w-4xl max-h-[88vh] overflow-y-auto rounded-2xl border border-stone-200 dark:border-stone-700 bg-white/95 dark:bg-stone-800/95 backdrop-blur-md md:grid md:grid-cols-[1fr_1.15fr]">
+        <div class="relative bg-stone-100 dark:bg-stone-900 min-h-[200px] md:min-h-[420px] overflow-hidden md:rounded-l-2xl">
+          <template x-if="detail.cover_url">
+            <div class="absolute inset-0">
+              <img :src="detail.cover_url" alt="" aria-hidden="true" class="absolute inset-0 w-full h-full object-cover scale-125 blur-2xl opacity-70 saturate-150">
+              <img :src="detail.cover_url" alt="" class="relative w-full h-full object-contain p-4 md:p-6 drop-shadow-2xl">
+            </div>
+          </template>
+          <template x-if="!detail.cover_url">
+            <div class="absolute inset-0 flex items-center justify-center text-white/45" :style="coverStyle(detail)" x-html="icon(88)"></div>
+          </template>
+        </div>
+
+        <div x-ref="dContent" class="p-5 sm:p-6 flex flex-col gap-4">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[10px] font-medium uppercase tracking-wide px-2 py-1 rounded-full" :class="statusTone(detail)" x-text="statusLabel(detail.status)"></span>
+            <button type="button" @click="closeDetail()" aria-label="Close" class="w-8 h-8 rounded-full flex items-center justify-center text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-100 dark:hover:bg-stone-700">&times;</button>
+          </div>
+
+          <h2 class="font-serif text-2xl leading-tight text-stone-900 dark:text-stone-100" x-text="detail.title"></h2>
+          <p class="mt-1 inline-flex items-center gap-1 text-[10.5px] text-stone-400 dark:text-stone-500 tabular-nums" x-show="detail.created_at" :title="'Added ' + stampFull(detail.created_at)"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span x-text="'Added ' + stamp(detail.created_at)"></span></p>
+
+          <div class="rounded-lg px-3 py-2.5 bg-stone-50 dark:bg-stone-900/50 border border-stone-200 dark:border-stone-700">
+            <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">{{ page.date_label }}</div>
+            <div class="mt-0.5 flex items-center justify-between gap-2 text-sm text-stone-900 dark:text-stone-100">
+              <span x-text="detail.target_date ? formatDate(detail.target_date) : 'Not set'"></span>
+              <span x-show="detail.target_date" class="text-xs font-medium" :class="{
+                'text-red-600 dark:text-red-400': dateTone(detail) === 'urgent',
+                'text-amber-600 dark:text-amber-400': dateTone(detail) === 'soon',
+                'text-emerald-700 dark:text-emerald-400': dateTone(detail) === 'calm' || dateTone(detail) === 'done',
+                'text-stone-400': dateTone(detail) === 'muted',
+              }" x-text="dateLabel(detail)"></span>
+            </div>
+          </div>
+
+          <p x-show="detail.notes" class="text-sm text-stone-700 dark:text-stone-300 whitespace-pre-line leading-relaxed max-h-56 overflow-y-auto" x-text="detail.notes"></p>
+          <p x-show="!detail.notes" class="text-sm text-stone-400 dark:text-stone-500 italic">No notes yet — add some with Edit.</p>
+
+          <template x-if="detail.url">
+            <a :href="detail.url" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 self-start text-sm text-rust dark:text-rust-light hover:text-[#9c4830] dark:hover:text-[#e08761]">
+              <span x-text="host(detail.url)"></span> &#8599;
+            </a>
+          </template>
+
+          <div>
+            <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-1.5">Status</div>
+            <div class="inline-flex flex-wrap p-1 rounded-full bg-stone-100 dark:bg-stone-900/60 border border-stone-200 dark:border-stone-700">
+              <template x-for="s in statuses" :key="s.key">
+                <button type="button" @click="setStatus(detail, s.key)" :aria-pressed="detail.status === s.key"
+                  :class="detail.status === s.key ? 'bg-white dark:bg-stone-700 text-stone-900 dark:text-stone-100 shadow-float' : 'text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100'"
+                  class="text-xs px-3 py-1.5 rounded-full" x-text="s.label"></button>
+              </template>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-baseline justify-between mb-1.5">
+              <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Tasks</div>
+              <span x-show="tasks.length" class="text-[11px] text-stone-400 dark:text-stone-500" x-text="tasks.filter((t) => t.status === 'pending').length + ' open'"></span>
+            </div>
+            <ul class="space-y-1" x-show="tasks.length">
+              <template x-for="t in tasks" :key="t.id">
+                <li class="group/task flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm border border-stone-200 dark:border-stone-700 hover:border-rust dark:hover:border-rust-light bg-white/60 dark:bg-stone-900/40">
+                  <button type="button" @click="toggleTask(t)" :title="t.status === 'done' ? 'Mark as not done' : 'Mark as done'"
+                    :class="t.status === 'done' ? 'bg-emerald-500 border-emerald-500' : 'border-stone-300 dark:border-stone-600 hover:border-emerald-500'"
+                    class="shrink-0 w-3.5 h-3.5 rounded-full border"></button>
+                  <a :href="t.url" title="Open this task" class="flex-1 min-w-0 flex items-center gap-2">
+                    <span :class="t.status === 'pending' ? 'text-stone-800 dark:text-stone-200' : 'text-stone-400 dark:text-stone-500 line-through'" class="flex-1 min-w-0 truncate" x-text="t.title"></span>
+                    <span x-show="taskStatusLabel(t)" class="shrink-0 text-[10px] uppercase tracking-wide text-stone-400" x-text="taskStatusLabel(t)"></span>
+                    <span x-show="t.stamp" class="shrink-0 text-[10px] text-stone-400 dark:text-stone-500 tabular-nums" :title="t.stamp ? t.stamp.label + ' ' + t.stamp.full : ''" x-text="t.stamp ? t.stamp.text : ''"></span>
+                    <span class="shrink-0 text-stone-300 dark:text-stone-600 group-hover/task:text-rust dark:group-hover/task:text-rust-light">&rarr;</span>
+                  </a>
+                </li>
+              </template>
+            </ul>
+            <p x-show="!tasks.length && !tasksLoading" class="text-xs text-stone-400 dark:text-stone-500">No tasks yet. Add one and it lands on today's brief, already linked here.</p>
+            <form @submit.prevent="addTask()" class="mt-2 flex gap-2">
+              <input type="text" x-model="taskDraft" maxlength="300" placeholder="Add a task for this…" class="flex-1 min-w-0 text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2.5 py-1.5 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+              <button type="submit" :disabled="!taskDraft.trim() || addingTask" class="shrink-0 text-xs px-3 py-1.5 rounded bg-rust text-white hover:bg-[#9c4830] disabled:opacity-40">Add</button>
+            </form>
+            <p x-show="taskError" x-text="taskError" class="mt-1 text-xs text-red-600 dark:text-red-400"></p>
+          </div>
+
+          <div class="mt-auto pt-2 flex flex-wrap items-center gap-2">
+            <button type="button" @click="openComposer(detail)" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100">Edit</button>
+            <template x-if="detail.map_node_id">
+              <a :href="`/map?card=${detail.map_node_id}`" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100">See on Map</a>
+            </template>
+            <template x-if="!detail.map_node_id">
+              <button type="button" @click="sendToMap(detail)" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100">Add to Map</button>
+            </template>
+            <a :href="detail.page_url" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100">Full details</a>
+            <button type="button" @click="remove(detail)" class="ml-auto text-xs px-3 py-1.5 rounded text-stone-400 hover:text-red-600 dark:hover:text-red-400">Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Composer -->
+  <template x-if="composer.open">
+    <div class="fixed inset-0 z-50 bg-black/45 flex items-end sm:items-center justify-center p-0 sm:p-6" @click.self="closeComposer()">
+      <form @submit.prevent="save()" class="pur-sheet-enter shadow-float w-full sm:max-w-xl max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-stone-200 dark:border-stone-700 bg-white/95 dark:bg-stone-800/95 backdrop-blur-md p-5 sm:p-6">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-serif text-xl text-stone-900 dark:text-stone-100" x-text='composer.editingId ? "Edit" : {{ page.add_label | tojson }}'></h2>
+          <button type="button" @click="closeComposer()" aria-label="Close" class="w-8 h-8 rounded-full flex items-center justify-center text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 hover:bg-stone-100 dark:hover:bg-stone-700">&times;</button>
+        </div>
+
+        <label class="block">
+          <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Name</span>
+          <input x-ref="composerTitle" type="text" x-model="composer.fields.title" required maxlength="200" placeholder="{{ page.placeholder }}" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        </label>
+
+        <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">{{ page.date_label }}</span>
+            <input type="date" x-model="composer.fields.target_date" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          </label>
+          <label class="block">
+            <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Link</span>
+            <input type="text" inputmode="url" x-model="composer.fields.url" maxlength="2000" placeholder="https://…" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          </label>
+        </div>
+
+        <label class="mt-3 block">
+          <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Notes</span>
+          <textarea x-model="composer.fields.notes" rows="5" maxlength="4000" placeholder="What it's about, why it matters, where you are with it…" class="mt-1 w-full text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded-lg px-3 py-2 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light resize-y"></textarea>
+        </label>
+
+        <div class="mt-3">
+          <span class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Cover image <span class="normal-case tracking-normal text-stone-400">(optional — paste, drop or browse)</span></span>
+          <div
+            @dragover.prevent="composer.dragging = true"
+            @dragleave.self="composer.dragging = false"
+            @drop.prevent="composer.dragging = false; setCover($event.dataTransfer.files[0])"
+            :class="composer.dragging ? 'is-over border-rust dark:border-rust-light bg-rust/5' : 'border-stone-300 dark:border-stone-600'"
+            class="pur-drop mt-1 relative rounded-xl border-2 border-dashed overflow-hidden"
+          >
+            <template x-if="composer.coverPreview || (composer.existingCover && !composer.removeCover)">
+              <div class="relative aspect-[16/7] bg-stone-100 dark:bg-stone-900">
+                <img :src="composer.coverPreview || composer.existingCover" alt="Cover preview" class="w-full h-full object-cover">
+                <button type="button" @click="clearCover()" class="absolute top-2 right-2 text-xs px-2.5 py-1 rounded-full bg-black/55 text-white hover:bg-black/70">Remove</button>
+              </div>
+            </template>
+            <template x-if="!(composer.coverPreview || (composer.existingCover && !composer.removeCover))">
+              <label class="flex items-center justify-center gap-2 py-5 px-4 text-center cursor-pointer text-xs text-stone-500 dark:text-stone-400">
+                <svg class="text-stone-400" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
+                <span>Paste (Ctrl+V), drop, or <span class="text-rust dark:text-rust-light underline">browse</span></span>
+                <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" class="sr-only" @change="setCover($event.target.files[0]); $event.target.value = ''">
+              </label>
+            </template>
+          </div>
+        </div>
+
+        <p x-show="composer.error" x-text="composer.error" class="mt-3 text-sm text-red-600 dark:text-red-400"></p>
+        <div class="mt-5 flex items-center justify-end gap-2">
+          <button type="button" @click="closeComposer()" class="text-sm px-4 py-2 rounded-full text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100">Cancel</button>
+          <button type="submit" :disabled="composer.saving" class="text-sm px-5 py-2 rounded-full bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50" x-text="composer.saving ? 'Saving…' : (composer.editingId ? 'Save changes' : 'Save')"></button>
+        </div>
+      </form>
+    </div>
+  </template>
+</main>
+{% endblock %}

@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Command Center — {{ focus.title }}{% endblock %}
+{% block content %}
+{# One page for anything tasks can belong to that isn't a project (a
+   project has its own, richer page): a map card — research, a target,
+   a hackathon — or a saved competition. Built from belongs.focus_view,
+   the same data the map's card popup shows. #}
+<script>
+function focusPage(focus) {
+  return {
+    focus: focus,
+    newTask: '',
+    adding: false,
+    addError: '',
+    get openTasks() { return this.focus.tasks.filter(t => t.status === 'pending'); },
+    get doneTasks() { return this.focus.tasks.filter(t => t.status === 'done'); },
+    get otherTasks() { return this.focus.tasks.filter(t => t.status !== 'pending' && t.status !== 'done'); },
+    get progress() {
+      const total = this.openTasks.length + this.doneTasks.length;
+      return total ? Math.round((this.doneTasks.length / total) * 100) : 0;
+    },
+    addTask() {
+      const title = this.newTask.trim();
+      if (!title || this.adding) return;
+      this.adding = true; this.addError = '';
+      fetch(this.focus.add_task_url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      }).then(async r => {
+        this.adding = false;
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { this.addError = data.detail || 'Could not add that task.'; return; }
+        this.focus.tasks.unshift(data);
+        this.newTask = '';
+      }).catch(() => { this.adding = false; this.addError = 'Could not reach the server.'; });
+    },
+    toggle(task) {
+      const next = task.status === 'done' ? 'pending' : 'done';
+      fetch(`/items/${task.id}/${next === 'done' ? 'done' : 'reopen'}`, { method: 'POST' })
+        .then(r => { if (r.ok) task.status = next; });
+    },
+  };
+}
+</script>
+
+{% set badge = {
+  'competition': 'bg-violet-50 dark:bg-violet-900/20 text-violet-800 dark:text-violet-300 border-violet-300 dark:border-violet-700',
+  'hackathon': 'bg-sky-50 dark:bg-sky-900/20 text-sky-800 dark:text-sky-300 border-sky-300 dark:border-sky-700',
+  'target': 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700',
+  'research': 'bg-stone-100 dark:bg-stone-700 text-stone-600 dark:text-stone-300 border-stone-300 dark:border-stone-600',
+}.get(focus.kind, 'bg-stone-100 dark:bg-stone-700 text-stone-600 dark:text-stone-300 border-stone-300 dark:border-stone-600') %}
+
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2 flex-wrap">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">{{ focus.title }}</h1>
+    {% if focus.back %}
+    <a href="{{ focus.back.url }}" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to {{ focus.back.label }}</a>
+    {% endif %}
+    {% if focus.board %}
+    <a href="/map?board={{ focus.board.id }}&card={{ focus.node_id }}" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">{{ '' if focus.back else '&#8592; ' | safe }}{{ focus.board.name }} on the map</a>
+    {% endif %}
+  </div>
+</header>
+{% set pursuits_tab = focus.back.label | lower if focus.back else "map" %}
+{% include "partials/pursuits_tabs.html" %}
+
+<main class="px-4 sm:px-6 py-6 max-w-5xl" x-data='focusPage({{ focus | tojson }})'>
+  <div class="lg:flex lg:items-start lg:gap-6">
+
+    <section class="lg:w-3/5 space-y-4">
+      <div class="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4 sm:p-5">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded border {{ badge }}">{{ focus.kind_label }}</span>
+          {% if focus.label %}
+          <span class="text-[11px] text-stone-500 dark:text-stone-400">under <span class="font-medium text-stone-700 dark:text-stone-200">{{ focus.label.title }}</span></span>
+          {% endif %}
+          <a href="{{ focus.edit_url }}" class="ml-auto text-xs px-2.5 py-1 rounded-full border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400">Edit</a>
+        </div>
+
+        <h2 class="font-serif text-2xl text-stone-900 dark:text-stone-100 mt-3 break-words">{{ focus.title }}</h2>
+        {% if focus.created_at %}
+        <p class="mt-1 inline-flex items-center gap-1 text-[11px] text-stone-400 dark:text-stone-500 tabular-nums" title="Added {{ focus.created_at | stamp_full }}"><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><time datetime="{{ focus.created_at }}">Added {{ focus.created_at | stamp }}</time></p>
+        {% endif %}
+
+        {% if focus.target_date %}
+        {% set days = (focus.target_date | string)[:10] %}
+        <p class="text-xs text-stone-500 dark:text-stone-400 mt-1">
+          {{ 'Deadline' if focus.competition_id else 'Target date' }}: <span class="font-medium text-stone-700 dark:text-stone-200">{{ days }}</span>
+          {% if days >= today %}<span class="text-rust dark:text-rust-light" x-data="{ d: Math.round((new Date('{{ days }}') - new Date('{{ today }}')) / 86400000) }" x-text="d === 0 ? ' · today' : (' · in ' + d + ' day' + (d === 1 ? '' : 's'))"></span>{% else %}<span class="text-stone-400"> · passed</span>{% endif %}
+        </p>
+        {% endif %}
+
+        <div class="mt-4">
+          <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-1">About</div>
+          {% if focus.description %}
+          <p class="text-sm text-stone-700 dark:text-stone-200 leading-relaxed whitespace-pre-wrap break-words">{{ focus.description }}</p>
+          {% else %}
+          <p class="text-sm text-stone-400 dark:text-stone-500 italic">No description yet — add one with Edit.</p>
+          {% endif %}
+        </div>
+
+        {% if focus.facts or focus.url %}
+        <dl class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
+          {% for fact in focus.facts %}
+          <div>
+            <dt class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">{{ fact.label }}</dt>
+            <dd class="text-sm text-stone-800 dark:text-stone-100 break-words">{{ fact.value }}</dd>
+          </div>
+          {% endfor %}
+          {% if focus.url %}
+          <div>
+            <dt class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Link</dt>
+            <dd class="text-sm break-all"><a href="{{ focus.url }}" target="_blank" rel="noopener noreferrer" class="text-rust dark:text-rust-light hover:underline">{{ focus.url }}</a></dd>
+          </div>
+          {% endif %}
+        </dl>
+        {% endif %}
+
+        {% if focus.image_url %}
+        <img src="{{ focus.image_url }}" alt="Image for {{ focus.title }}" class="mt-4 w-full rounded-lg border border-stone-200 dark:border-stone-700">
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="lg:w-2/5 mt-4 lg:mt-0">
+      <div class="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 p-4">
+        <div class="flex items-baseline justify-between">
+          <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400">Tasks</div>
+          <div class="text-[11px] text-stone-500 dark:text-stone-400" x-text="openTasks.length + ' open · ' + doneTasks.length + ' done'"></div>
+        </div>
+        <div class="mt-2 h-1.5 rounded-full bg-stone-100 dark:bg-stone-700 overflow-hidden" x-show="openTasks.length + doneTasks.length">
+          <div class="h-full rounded-full bg-violet-500 transition-all duration-500" :style="`width: ${progress}%`"></div>
+        </div>
+
+        <form @submit.prevent="addTask()" class="mt-3 flex gap-1.5">
+          <input type="text" x-model="newTask" placeholder="Add a task for this…" maxlength="300" class="flex-1 min-w-0 text-xs bg-white dark:bg-stone-900 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+          <button type="submit" :disabled="adding || !newTask.trim()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium disabled:opacity-50">Add</button>
+        </form>
+        <p x-show="addError" x-text="addError" class="text-[11px] text-red-600 dark:text-red-400 mt-1"></p>
+        <p class="text-[11px] text-stone-400 dark:text-stone-500 mt-1">New tasks land in today's brief, already linked here.</p>
+
+        <ul class="mt-3 space-y-1">
+          <template x-for="task in [...openTasks, ...otherTasks, ...doneTasks]" :key="task.id">
+            <li class="group flex items-start gap-2 rounded-lg px-2 py-1.5 hover:bg-stone-50 dark:hover:bg-stone-700/40">
+              <button type="button" @click="toggle(task)" :title="task.status === 'done' ? 'Mark as not done' : 'Mark as done'"
+                class="mt-0.5 w-4 h-4 shrink-0 rounded border flex items-center justify-center"
+                :class="task.status === 'done' ? 'bg-violet-500 border-violet-500 text-white' : 'border-stone-300 dark:border-stone-500'">
+                <span x-show="task.status === 'done'" class="text-[10px] leading-none">&#10003;</span>
+              </button>
+              <a :href="task.url" class="flex-1 min-w-0">
+                <span class="block text-sm break-words" :class="task.status === 'done' ? 'line-through text-stone-400 dark:text-stone-500' : 'text-stone-800 dark:text-stone-100 group-hover:underline'" x-text="task.title"></span>
+                <span class="block text-[11px] text-stone-400 dark:text-stone-500" :title="task.stamp ? task.stamp.label + ' ' + task.stamp.full : ''" x-text="(task.stamp ? task.stamp.label + ' ' + task.stamp.text + ' · ' : '') + (task.due_date ? 'due ' + task.due_date + ' · ' : '') + 'on ' + task.brief_date + (task.status !== 'pending' && task.status !== 'done' ? ' · ' + task.status : '')"></span>
+              </a>
+            </li>
+          </template>
+        </ul>
+        <p x-show="!focus.tasks.length" class="text-xs text-stone-400 dark:text-stone-500 italic mt-3">No tasks linked yet. Add one above, link one from a task's popup, or ask the assistant.</p>
+      </div>
+    </section>
+
+  </div>
+</main>
+{% endblock %}

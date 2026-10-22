@@ -1,0 +1,309 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Settings{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Settings</h1>
+    <a href="/brief" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to brief</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div class="max-w-2xl space-y-3">
+    <div class="rounded-lg border {{ 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30' if health.status == 'degraded' else 'border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800' }} px-4 py-3">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full {{ 'bg-amber-500' if health.status == 'degraded' else 'bg-green-500' }}"></span>
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">System status</div>
+      </div>
+      <div class="mt-1.5 text-xs text-stone-600 dark:text-stone-300 space-y-0.5">
+        <div>Google: {{ "Connected" if health.google_connected else "Not connected — brief shows sample data" }}</div>
+        <div>Triage provider: {{ health.triage_provider }}</div>
+        {% if health.degraded_today %}
+        <div class="text-amber-700 dark:text-amber-400">Degraded today: {{ health.degraded_today | join(", ") }}</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Assistant index</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Last indexed: {{ assistant_last_indexed_at[:16] if assistant_last_indexed_at else "never" }}
+          &middot; {{ assistant_chunk_count }} chunk{{ "" if assistant_chunk_count == 1 else "s" }}
+        </div>
+      </div>
+      <form method="post" action="/settings/assistant/rebuild-index">
+        <button class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Rebuild index
+        </button>
+      </form>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Knowledge documents</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Upload a CV or project writeup (PDF) so the assistant knows about it.
+        </div>
+      </div>
+      <a href="/settings/knowledge" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
+    <div x-data="{ enabled: localStorage.getItem('tooltipsEnabled') !== 'off' }" class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Show icon labels on hover</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">Small tooltip labels when hovering the header icons.</div>
+      </div>
+      <label class="flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-300">
+        <input type="checkbox" x-model="enabled"
+          @change="
+            localStorage.setItem('tooltipsEnabled', enabled ? 'on' : 'off');
+            document.documentElement.classList.toggle('tooltips-disabled', !enabled);
+          "
+          class="accent-rust">
+        Enabled
+      </label>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Projects</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Registered local codebases, linked tasks, and file indexing.
+        </div>
+      </div>
+      <a href="/projects" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Recurring schedule</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Work hours, gym, standing syncs &mdash; used to compute free time on <a href="/schedule" class="underline hover:text-stone-900 dark:hover:text-stone-100">/schedule</a>.
+        </div>
+      </div>
+      <a href="/settings/schedule" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3">
+      <div class="font-serif text-base text-stone-900 dark:text-stone-100">Export data</div>
+      <div class="text-xs text-stone-500 dark:text-stone-400 mb-2">
+        Your data, not the repo's — download everything if you ever want to leave.
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <a href="/settings/export.json" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Everything (JSON)
+        </a>
+        <a href="/settings/export/items.csv" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 font-medium whitespace-nowrap">
+          Items (CSV)
+        </a>
+        <a href="/settings/export/finances.csv" class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 font-medium whitespace-nowrap">
+          Finances (CSV)
+        </a>
+      </div>
+    </div>
+
+    <div
+      x-data="{ sending: false, result: '' }"
+      class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between"
+    >
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Notifications</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          {% if notify_configured %}
+          ntfy configured — nudges push in the background, once a day each.
+          {% else %}
+          Not configured — set NTFY_TOPIC in .env to push nudges outside the app.
+          {% endif %}
+        </div>
+        <p x-show="result" x-text="result" class="text-xs mt-1" :class="result.startsWith('Sent') ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'"></p>
+      </div>
+      <button
+        type="button"
+        :disabled="sending"
+        @click="
+          sending = true; result = '';
+          fetch('/settings/notifications/test', { method: 'POST' }).then(async r => {
+            sending = false;
+            if (r.ok) { result = 'Sent — check your ntfy app.'; }
+            else { const data = await r.json(); result = data.detail || 'Could not send.'; }
+          });
+        "
+        class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-stone-100 hover:border-stone-400 dark:hover:border-stone-500 font-medium whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        <span x-show="!sending">Send test notification</span>
+        <span x-show="sending">Sending…</span>
+      </button>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Lane labels</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Rename how urgent/action_items/meeting_prep/tasks_due/reading display everywhere.
+        </div>
+      </div>
+      <a href="/settings/lane-labels" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
+    <div
+      x-data="{ language: '', saved: '', error: '', save() {
+        this.error = '';
+        fetch('/settings/summary-language', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ language: this.language }) })
+          .then(async r => { const d = await r.json().catch(() => ({})); if (!r.ok) { this.error = d.detail || 'Could not save.'; return; } this.language = d.language; this.saved = d.language; });
+      } }"
+      x-init="language = $el.dataset.language; saved = language"
+      data-language="{{ summary_language }}"
+      class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between"
+    >
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Summary language</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Every card's summary and "Next:" line is written in this language, whatever language the mail is in.
+        </div>
+        <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-1"></p>
+      </div>
+      <form @submit.prevent="save()" class="flex items-center gap-2">
+        <input type="text" x-model="language" maxlength="40" aria-label="Summary language" class="w-32 text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <button type="submit" :disabled="language.trim() === saved" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap disabled:opacity-40">Save</button>
+      </form>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Triage rules</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Send newsletters, promotions or senders straight to Reading (or skip them), or override the AI's lane.
+        </div>
+      </div>
+      <a href="/settings/triage-rules" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Activity</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Recent assistant tool calls and item history — for debugging, not day-to-day use.
+        </div>
+      </div>
+      <a href="/settings/activity" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        View
+      </a>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Invites</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Admin-only &mdash; generate a link to gate first-run setup for someone you're sharing this instance with.
+        </div>
+      </div>
+      <a href="/settings/invites" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+        Manage
+      </a>
+    </div>
+
+    <div class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">All sources</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Turns every source below on and pulls them all at once &mdash; use it when today's brief didn't generate.
+        </div>
+      </div>
+      <form method="post" action="/settings/sources/pull-all">
+        <button class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Enable &amp; pull all
+        </button>
+      </form>
+    </div>
+
+    {% for src in sources %}
+    <div
+      x-data="{
+        enabled: {{ 'true' if src.enabled else 'false' }},
+        interval: {{ src.interval_minutes }},
+        savedInterval: {{ src.interval_minutes }},
+        error: '',
+        toggleEnabled() {
+          this.error = '';
+          const value = this.enabled;
+          fetch('/settings/sources/{{ src.source_name }}', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: value }),
+          }).then(r => { if (!r.ok) { this.enabled = !value; this.error = 'Could not save — try again.'; } });
+        },
+        changeInterval() {
+          this.error = '';
+          const value = this.interval;
+          fetch('/settings/sources/{{ src.source_name }}', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ interval_minutes: value }),
+          }).then(r => {
+            if (r.ok) { this.savedInterval = value; }
+            else { this.interval = this.savedInterval; this.error = 'Could not save — try again.'; }
+          });
+        },
+      }"
+      class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between"
+    >
+      <div class="min-w-0">
+        <div class="flex items-center gap-1.5">
+          <div class="font-serif text-base text-stone-900 dark:text-stone-100 capitalize">{{ src.source_name }}</div>
+          {% if src.source_name in health.degraded_today %}
+          <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Degraded today</span>
+          {% endif %}
+        </div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          Last pulled: {{ src.last_pulled_at[:16] if src.last_pulled_at else "never" }}
+        </div>
+        <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-1"></p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3">
+        <label class="flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-300">
+          <input
+            type="checkbox"
+            x-model="enabled"
+            @change="toggleEnabled()"
+            class="accent-rust"
+          >
+          Enabled
+        </label>
+
+        <select
+          x-model.number="interval"
+          @change="changeInterval()"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+        >
+          <option value="15">Every 15 min</option>
+          <option value="30">Every 30 min</option>
+          <option value="60">Every hour</option>
+          <option value="120">Every 2 hours</option>
+          <option value="240">Every 4 hours</option>
+          <option value="1440">Once a day</option>
+        </select>
+
+        <form method="post" action="/settings/sources/{{ src.source_name }}/pull">
+          <button class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+            Pull now
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</main>
+{% endblock %}

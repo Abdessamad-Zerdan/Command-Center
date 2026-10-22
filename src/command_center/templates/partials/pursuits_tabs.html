@@ -1,0 +1,28 @@
+{# The Pursuits section's own sub-menu: one entry in the nav rail
+   ("Pursuits"), and this tab row across the top of each of its five
+   pages. The including page sets `pursuits_tab` to its own key; counts
+   come from the pursuits_tab_counts() template global (see
+   pursuits.install_template_globals). #}
+{% set _counts = pursuits_tab_counts() %}
+{% set _tabs = [
+  ("map", "Map", "/map", None),
+  ("competitions", "Competitions", "/competitions", _counts.competitions),
+  ("research", "Research", "/research", _counts.research),
+  ("targets", "Targets", "/targets", _counts.targets),
+  ("projects", "Projects", "/projects", _counts.projects),
+] %}
+<nav aria-label="Pursuits" class="px-4 sm:px-6 pt-3">
+  <div class="inline-flex max-w-full overflow-x-auto gap-1 p-1 rounded-full border border-stone-200 dark:border-stone-700 bg-white/60 dark:bg-stone-800/50 backdrop-blur-sm">
+    {% for key, label, href, count in _tabs %}
+    {% set current = pursuits_tab == key %}
+    <a
+      href="{{ href }}"
+      {% if current %}aria-current="page"{% endif %}
+      class="shrink-0 inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full whitespace-nowrap transition-colors {{ 'bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900' if current else 'text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700/60' }}"
+    >
+      <span>{{ label }}</span>
+      {% if count %}<span class="tabular-nums text-[10px] {{ 'opacity-70' if current else 'text-stone-400 dark:text-stone-500' }}">{{ count }}</span>{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+</nav>

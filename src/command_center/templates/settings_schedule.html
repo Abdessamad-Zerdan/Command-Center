@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Command Center — Schedule Settings{% endblock %}
+{% block content %}
+<header class="border-b border-stone-200 dark:border-stone-700 px-4 py-3 sm:px-6 pr-28 sm:pr-32">
+  <div class="text-[11px] uppercase tracking-wider text-stone-500 dark:text-stone-400">Daily Command Center</div>
+  <div class="flex items-baseline gap-2">
+    <h1 class="font-serif text-lg text-stone-900 dark:text-stone-100">Schedule Settings</h1>
+    <a href="/settings" class="text-xs text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 underline">&#8592; Back to settings</a>
+  </div>
+</header>
+
+<main class="px-4 sm:px-6 py-6">
+  <div class="max-w-2xl space-y-3">
+
+    <div
+      x-data="{
+        start: '{{ day_bounds_start }}', end: '{{ day_bounds_end }}',
+        savedStart: '{{ day_bounds_start }}', savedEnd: '{{ day_bounds_end }}',
+        error: '',
+        save() {
+          this.error = '';
+          const start = this.start, end = this.end;
+          fetch('/settings/schedule/day-bounds', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ day_bounds_start: start, day_bounds_end: end }),
+          }).then(r => {
+            if (r.ok) { this.savedStart = start; this.savedEnd = end; }
+            else { this.start = this.savedStart; this.end = this.savedEnd; this.error = 'Could not save — try again.'; }
+          });
+        },
+      }"
+      class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between"
+    >
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">Day bounds</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">The window free time is computed within, each day.</div>
+        <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-1"></p>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="time" x-model="start" @change="save()"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <span class="text-xs text-stone-400 dark:text-stone-500">to</span>
+        <input type="time" x-model="end" @change="save()"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light">
+      </div>
+    </div>
+
+    {% if not commitments %}
+    <p class="text-xs text-stone-400 dark:text-stone-500 italic px-1">No recurring commitments yet — add one below.</p>
+    {% endif %}
+
+    {% for c in commitments %}
+    <div
+      x-data="{
+        active: {{ 'true' if c.active else 'false' }},
+        error: '',
+        toggleActive() {
+          this.error = '';
+          const value = this.active;
+          fetch('/settings/schedule/commitments/{{ c.id }}', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ active: value }),
+          }).then(r => { if (!r.ok) { this.active = !value; this.error = 'Could not save — try again.'; } });
+        },
+        remove(el) {
+          if (!confirm('Delete this commitment?')) return;
+          this.error = '';
+          fetch('/settings/schedule/commitments/{{ c.id }}', { method: 'DELETE' }).then(r => {
+            if (r.ok) { el.remove(); }
+            else { this.error = 'Could not delete — try again.'; }
+          });
+        },
+      }"
+      class="rounded-lg border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 px-4 py-3 flex flex-wrap items-center gap-3 justify-between"
+    >
+      <div class="min-w-0">
+        <div class="font-serif text-base text-stone-900 dark:text-stone-100">{{ c.title }}</div>
+        <div class="text-xs text-stone-500 dark:text-stone-400">
+          {{ day_names[c.day_of_week] }} &middot; {{ c.start_time }}&ndash;{{ c.end_time }}
+        </div>
+        <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-1"></p>
+      </div>
+      <div class="flex items-center gap-3">
+        <label class="flex items-center gap-1.5 text-xs text-stone-600 dark:text-stone-300">
+          <input type="checkbox" x-model="active" @change="toggleActive()" class="accent-rust">
+          Active
+        </label>
+        <button
+          @click="remove($el.closest('[x-data]'))"
+          class="text-xs px-3 py-1.5 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-red-600 dark:hover:text-red-400 whitespace-nowrap">
+          Delete
+        </button>
+      </div>
+    </div>
+    {% endfor %}
+
+    <div
+      x-data="{
+        title: '', day_of_week: 0, start_time: '09:00', end_time: '17:00', error: '',
+        submit() {
+          this.error = '';
+          fetch('/settings/schedule/commitments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: this.title, day_of_week: Number(this.day_of_week), start_time: this.start_time, end_time: this.end_time }),
+          }).then(async r => {
+            if (r.ok) { location.reload(); return; }
+            const data = await r.json().catch(() => ({}));
+            this.error = data.detail || 'Could not add that commitment.';
+          });
+        }
+      }"
+      class="rounded-lg border border-dashed border-stone-300 dark:border-stone-600 bg-white dark:bg-stone-800 px-4 py-3"
+    >
+      <div class="flex flex-wrap items-center gap-2">
+        <input type="text" x-model="title" placeholder="Title (e.g. Work hours)"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 flex-1 min-w-[10rem] focus:outline-none focus:border-rust dark:focus:border-rust-light">
+        <select x-model.number="day_of_week"
+          class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100">
+          {% for name in day_names %}
+          <option value="{{ loop.index0 }}">{{ name }}</option>
+          {% endfor %}
+        </select>
+        <input type="time" x-model="start_time" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100">
+        <input type="time" x-model="end_time" class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100">
+        <button @click="submit()" class="text-xs px-3 py-1.5 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap">
+          Add
+        </button>
+      </div>
+      <p x-show="error" x-text="error" class="text-xs text-red-600 dark:text-red-400 mt-2"></p>
+    </div>
+
+  </div>
+</main>
+{% endblock %}

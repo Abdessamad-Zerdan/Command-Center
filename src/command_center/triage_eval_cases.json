@@ -1,0 +1,394 @@
+{
+  "_about": "Representative brief inputs with the lane each should land in. Synthetic (no real mail). {today+N} / {today-N} become dates relative to the run. 'simulated' is what a careless model said for that item - used by the offline test (see triage_eval.py) to prove the deterministic layers catch it. 'accept' lists other lanes that are just as right. 'known_gap' marks a case the built-in rules get wrong, kept so the gap stays visible.",
+  "cases": [
+    {
+      "id": "linkedin-job-alert",
+      "note": "Review: a LinkedIn job alert was filed as an Action Item.",
+      "source": "gmail",
+      "title": "Amazon Business Analyst, Operations and 8 more jobs for you",
+      "body": "New jobs match your preferences. Business Analyst - Amazon - Istanbul. Apply now.",
+      "metadata": {
+        "from": "LinkedIn <jobalerts-noreply@linkedin.com>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_UPDATES"
+        ],
+        "list_unsubscribe": true
+      },
+      "expected": "skip",
+      "simulated": {
+        "lane": "action_items"
+      }
+    },
+    {
+      "id": "paid-survey",
+      "note": "Review: a '$5 for 5 min' survey was filed as an Action Item.",
+      "source": "gmail",
+      "title": "Abdessamad, $5 for 5 min: share how you use AI tools",
+      "body": "Take a short survey and get a $5 gift card.",
+      "metadata": {
+        "from": "User Interviews <hello@userinterviews.com>",
+        "labels": [
+          "INBOX"
+        ],
+        "list_unsubscribe": true
+      },
+      "expected": "skip",
+      "simulated": {
+        "lane": "action_items"
+      }
+    },
+    {
+      "id": "nvidia-gtc-promo",
+      "note": "Review: a promotional 'add to calendar' mail was filed as Meeting Prep.",
+      "source": "gmail",
+      "title": "Add to calendar: NVIDIA GTC keynote",
+      "body": "Don't miss the GTC keynote. Add it to your calendar.",
+      "metadata": {
+        "from": "NVIDIA <news@nvidia.com>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_PROMOTIONS"
+        ],
+        "list_unsubscribe": true
+      },
+      "expected": "skip",
+      "simulated": {
+        "lane": "meeting_prep"
+      }
+    },
+    {
+      "id": "event-promo-in-primary",
+      "note": "Same kind of promo, but it landed in Primary - only the Meeting Prep check can catch it.",
+      "source": "gmail",
+      "title": "Save the date: AI Summit Istanbul",
+      "body": "Join us on stage. Add the event to your calendar.",
+      "metadata": {
+        "from": "AI Summit <events@aisummit.io>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_PERSONAL"
+        ],
+        "list_unsubscribe": true
+      },
+      "expected": "reading",
+      "simulated": {
+        "lane": "meeting_prep"
+      }
+    },
+    {
+      "id": "agenthon-deadline-passed",
+      "note": "Review: a deadline that had already passed was in Tasks Due with 'upload immediately'. Reading is fine too: nothing to do, and the card says 'Deadline passed'.",
+      "source": "gmail",
+      "title": "Agenthon 2026: Development closes",
+      "body": "Final reminder: development closes {today-2} 23:59 AoE. Upload your submission.",
+      "metadata": {
+        "from": "Agenthon <team@agenthon.net>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_PERSONAL"
+        ],
+        "list_unsubscribe": true
+      },
+      "expected": "action_items",
+      "expect_missed": true,
+      "simulated": {
+        "lane": "tasks_due",
+        "priority": 1,
+        "deadline": "{today-2} 23:59 AoE",
+        "suggested_next_step": "Upload immediately."
+      },
+      "accept": [
+        "reading"
+      ]
+    },
+    {
+      "id": "agenthon-deadline-upcoming",
+      "source": "gmail",
+      "title": "Agenthon 2026: final round opens",
+      "body": "Final submissions are due {today+10} 14:59 Istanbul time.",
+      "metadata": {
+        "from": "Agenthon <team@agenthon.net>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_PERSONAL"
+        ],
+        "list_unsubscribe": true
+      },
+      "expected": "action_items",
+      "simulated": {
+        "lane": "action_items",
+        "deadline": "{today+10} 14:59 Istanbul time"
+      },
+      "note": "Tasks due means due today; a deadline ten days out is an action item."
+    },
+    {
+      "id": "manager-contract-today",
+      "source": "gmail",
+      "title": "Contract review needed today",
+      "body": "Can you review the attached contract before 5pm? The client signs tomorrow.",
+      "metadata": {
+        "from": "Ayse Kaya <ayse@company.com>",
+        "labels": [
+          "INBOX",
+          "IMPORTANT",
+          "CATEGORY_PERSONAL"
+        ],
+        "list_unsubscribe": false
+      },
+      "expected": "urgent",
+      "simulated": {
+        "lane": "urgent"
+      }
+    },
+    {
+      "id": "advisor-question",
+      "source": "gmail",
+      "title": "Re: TÜBİTAK 2242 application",
+      "body": "Send me your draft research question by Friday and we can discuss.",
+      "metadata": {
+        "from": "Prof. Demir <demir@university.edu.tr>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_PERSONAL"
+        ],
+        "list_unsubscribe": false
+      },
+      "expected": "action_items",
+      "simulated": {
+        "lane": "action_items"
+      }
+    },
+    {
+      "id": "emailed-invite",
+      "note": "A real invite (.ics) not yet accepted needs a reply, not meeting prep.",
+      "source": "gmail",
+      "title": "Invitation: Thesis sync @ Thu 15:00",
+      "body": "You have been invited to Thesis sync.",
+      "metadata": {
+        "from": "Prof. Demir <demir@university.edu.tr>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_PERSONAL"
+        ],
+        "list_unsubscribe": false,
+        "calendar_invite": true
+      },
+      "expected": "action_items",
+      "simulated": {
+        "lane": "meeting_prep"
+      }
+    },
+    {
+      "id": "bank-security-alert",
+      "source": "gmail",
+      "title": "New sign-in to your bank account",
+      "body": "We noticed a sign-in from a new device. If this wasn't you, call us now.",
+      "metadata": {
+        "from": "Bank <security@bank.com>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_UPDATES"
+        ],
+        "list_unsubscribe": false
+      },
+      "expected": "urgent",
+      "simulated": {
+        "lane": "urgent"
+      }
+    },
+    {
+      "id": "newsletter",
+      "source": "gmail",
+      "title": "This week in AI: agents everywhere",
+      "body": "The top stories in AI this week.",
+      "metadata": {
+        "from": "The Batch <thebatch@deeplearning.ai>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_UPDATES"
+        ],
+        "list_unsubscribe": true
+      },
+      "expected": "reading",
+      "simulated": {
+        "lane": "action_items"
+      }
+    },
+    {
+      "id": "social-notification",
+      "source": "gmail",
+      "title": "3 people viewed your profile",
+      "body": "See who's looking at your profile.",
+      "metadata": {
+        "from": "LinkedIn <notifications-noreply@linkedin.com>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_SOCIAL"
+        ],
+        "list_unsubscribe": true
+      },
+      "expected": "skip",
+      "simulated": {
+        "lane": "action_items"
+      }
+    },
+    {
+      "id": "github-security-alert",
+      "note": "Dependabot alerts arrive as bulk mail outside Primary, so the built-in bulk rule sends them to Reading. Fix with a personal rule (sender github -> Action items).",
+      "source": "gmail",
+      "title": "[Hukuk-Denge] Critical security alert: urllib3",
+      "body": "A critical vulnerability was found in a dependency.",
+      "metadata": {
+        "from": "GitHub <noreply@github.com>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_UPDATES"
+        ],
+        "list_unsubscribe": true
+      },
+      "expected": "action_items",
+      "known_gap": true,
+      "simulated": {
+        "lane": "action_items"
+      }
+    },
+    {
+      "id": "receipt",
+      "source": "gmail",
+      "title": "Your receipt from Groq",
+      "body": "Thanks for your payment.",
+      "metadata": {
+        "from": "Groq <billing@groq.com>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_UPDATES"
+        ],
+        "list_unsubscribe": false
+      },
+      "expected": "reading",
+      "simulated": {
+        "lane": "reading"
+      }
+    },
+    {
+      "id": "turkish-recruiter",
+      "note": "A personal message in Turkish - summary must still be in the summary language.",
+      "source": "gmail",
+      "title": "Yapay zeka mühendisi pozisyonu hakkında",
+      "body": "Merhaba, ekibimize katılmak ister misiniz? Bu hafta görüşebilir miyiz?",
+      "metadata": {
+        "from": "Mehmet Yilmaz <mehmet@startup.com.tr>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_PERSONAL"
+        ],
+        "list_unsubscribe": false
+      },
+      "expected": "action_items",
+      "simulated": {
+        "lane": "action_items"
+      }
+    },
+    {
+      "id": "calendar-standup-accepted",
+      "source": "calendar",
+      "title": "Team standup",
+      "body": "Attendees: me@x.com, team@company.com",
+      "metadata": {
+        "my_response": "accepted",
+        "start_time": "{today+0}T10:00:00+03:00"
+      },
+      "expected": "meeting_prep",
+      "simulated": {
+        "lane": "meeting_prep"
+      }
+    },
+    {
+      "id": "calendar-own-meeting",
+      "source": "calendar",
+      "title": "1:1 with advisor: research question",
+      "body": "Attendees: demir@university.edu.tr",
+      "metadata": {
+        "start_time": "{today+0}T14:00:00+03:00"
+      },
+      "expected": "meeting_prep",
+      "simulated": {
+        "lane": "meeting_prep"
+      },
+      "note": "A meeting the user organised (no attendee entry for themselves)."
+    },
+    {
+      "id": "calendar-unanswered-invite",
+      "source": "calendar",
+      "title": "Hackathon team kickoff",
+      "body": "Attendees: me@x.com, lead@team.io",
+      "metadata": {
+        "my_response": "needsAction",
+        "start_time": "{today+1}T18:00:00+03:00"
+      },
+      "expected": "action_items",
+      "simulated": {
+        "lane": "meeting_prep"
+      }
+    },
+    {
+      "id": "task-due-today",
+      "source": "google_tasks",
+      "title": "Submit internship report",
+      "body": "",
+      "metadata": {
+        "due": "{today+0}T00:00:00.000Z"
+      },
+      "expected": "tasks_due",
+      "simulated": {
+        "lane": "meeting_prep"
+      }
+    },
+    {
+      "id": "task-due-later",
+      "source": "google_tasks",
+      "title": "Prepare thesis outline",
+      "body": "",
+      "metadata": {
+        "due": "{today+3}T00:00:00.000Z"
+      },
+      "expected": "action_items",
+      "simulated": {
+        "lane": "meeting_prep"
+      },
+      "note": "Tasks due means due today; due in three days is an action item."
+    },
+    {
+      "id": "task-without-date",
+      "source": "google_tasks",
+      "title": "Read the RAG evaluation paper",
+      "body": "",
+      "metadata": {},
+      "expected": "action_items",
+      "simulated": {
+        "lane": "action_items"
+      }
+    },
+    {
+      "id": "deadline-today",
+      "source": "gmail",
+      "title": "Reminder: scholarship form closes tonight",
+      "body": "The form closes today at 23:59 AoE.",
+      "metadata": {
+        "from": "Scholarship Office <office@university.edu.tr>",
+        "labels": [
+          "INBOX",
+          "CATEGORY_PERSONAL"
+        ],
+        "list_unsubscribe": false
+      },
+      "expected": "tasks_due",
+      "simulated": {
+        "lane": "tasks_due",
+        "deadline": "{today+0} 23:59 AoE"
+      },
+      "note": "AoE so the case means 'due later today' at any hour the eval runs."
+    }
+  ]
+}

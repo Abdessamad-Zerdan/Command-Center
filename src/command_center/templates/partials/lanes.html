@@ -1,0 +1,151 @@
+{# Two views of the same brief, chosen by the brief_view cookie:
+   - "priority" (default): open work from Urgent, Action items and Tasks
+     due in High / Medium / Low columns (prioritize.py sorts them), then
+     Meeting prep and Reading as they are. Dropping a card in a priority
+     column sets that priority, and locks it against the model.
+   - "sections": one column per lane, as before.
+   Only one view is rendered, never both: ?open=ID finds a card by its
+   data-item-id, so a card must exist once on the page. #}
+{% set priority_board = brief_view == 'priority' and not is_history %}
+{% set _work_lanes = ['urgent', 'action_items', 'tasks_due'] %}
+{% set _priority_labels = {1: 'High', 2: 'Medium', 3: 'Low'} %}
+
+{% macro column(key, label, items, drop_url, drop_body, add_body, count_store) %}
+<div
+  {% if not is_history %}
+  x-data="{ dragOver: false }"
+  @dragover.prevent="dragOver = true"
+  @dragleave="dragOver = false"
+  @drop.prevent="
+    dragOver = false;
+    const itemId = $event.dataTransfer.getData('text/plain');
+    if (!itemId) return;
+    fetch(`/items/${itemId}/{{ drop_url }}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({{ drop_body }}),
+    }).then(r => { if (r.ok) window.location.reload(); });
+  "
+  :class="dragOver ? 'ring-2 ring-rust dark:ring-rust-light bg-rust/5 dark:bg-rust-light/5' : ''"
+  {% endif %}
+  {# No backdrop-blur: what's behind is the already-blurred ambient sky, so
+     it looked identical — but re-blurring five tall columns on every
+     frame the sky drifts made scrolling the brief lag. #}
+  data-column="{{ key }}"
+  class="rounded-xl p-2 bg-white/40 dark:bg-stone-800/25 border border-white/60 dark:border-stone-700/40 transition-colors"
+>
+  <div class="flex items-center justify-between mb-2">
+    <h2 class="text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400">{{ label }}</h2>
+    {% if count_store %}
+    <span class="text-xs text-stone-400 dark:text-stone-500" x-data x-text="$store.counts['{{ key }}']"></span>
+    {% else %}
+    <span class="text-xs text-stone-400 dark:text-stone-500">{{ items | length }}</span>
+    {% endif %}
+  </div>
+  {% if items %}
+    {% if count_store %}
+      {% set priorities_in_lane = items | map(attribute='priority') | unique | list %}
+      {% for priority, group_items in items | groupby('priority') %}
+      {% if priorities_in_lane | length > 1 %}
+      <div class="text-[10px] uppercase tracking-wide text-stone-400 dark:text-stone-500 mt-3 mb-1 first:mt-0">
+        {{ _priority_labels.get(priority, 'Low') }} priority
+      </div>
+      {% endif %}
+      {% for item in group_items %}
+        {% include "partials/item_card.html" %}
+      {% endfor %}
+      {% endfor %}
+    {% else %}
+      {% for item in items %}
+        {% include "partials/item_card.html" %}
+      {% endfor %}
+    {% endif %}
+  {% else %}
+    <div class="all-clear">
+      <span class="all-clear-ring" aria-hidden="true"></span>
+      <span class="text-xs text-stone-400 dark:text-stone-500">All clear</span>
+    </div>
+  {% endif %}
+  {% if not is_history %}
+  <div class="mt-1" x-data="{ adding: false, title: '', dueDate: '' }">
+    <button
+      type="button"
+      x-show="!adding"
+      @click="adding = true; $nextTick(() => $refs.newTaskInput.focus())"
+      class="text-xs text-stone-400 dark:text-stone-500 hover:text-rust dark:hover:text-rust-light"
+    >+ Add task</button>
+    <form
+      x-show="adding"
+      @submit.prevent="
+        if (!title.trim()) return;
+        const body = {{ add_body }};
+        if (dueDate) body.due_date = dueDate;
+        fetch('/items', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }).then(r => { if (r.ok) window.location.reload(); });
+      "
+      class="flex gap-1"
+    >
+      <input
+        type="text"
+        x-model="title"
+        x-ref="newTaskInput"
+        placeholder="Task title..."
+        @keydown.escape="adding = false; title = ''; dueDate = ''"
+        class="min-w-0 flex-1 text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-2 py-1 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+      >
+      <input
+        type="date"
+        x-model="dueDate"
+        class="text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1.5 py-1 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+      >
+      <button type="submit" class="text-xs px-2 py-1 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white shrink-0">Add</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+<main id="lanes-container" class="px-4 sm:px-6 pb-10">
+  {% if not is_history %}
+  {# x-data: @click only runs inside an Alpine component. #}
+  <div x-data class="flex items-center justify-end gap-1 mb-2 text-xs" role="group" aria-label="Brief layout">
+    <span class="text-stone-400 dark:text-stone-500 mr-1">View</span>
+    {% for value, text in [('priority', 'By priority'), ('sections', 'By section')] %}
+    <button
+      type="button"
+      aria-pressed="{{ 'true' if brief_view == value else 'false' }}"
+      @click="document.cookie = 'brief_view={{ value }}; path=/; max-age=31536000; samesite=lax'; window.location.reload()"
+      class="px-2 py-0.5 rounded {{ 'bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900' if brief_view == value else 'text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100' }}"
+    >{{ text }}</button>
+    {% endfor %}
+  </div>
+  {% if priority_board and prioritize_failed_at %}
+  <p class="mb-2 text-xs text-amber-700 dark:text-amber-400">Couldn't re-sort priorities at {{ prioritize_failed_at }} — showing the last ones.</p>
+  {% endif %}
+  {% endif %}
+
+  <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
+    {% if priority_board %}
+      {% set work = [] %}
+      {% for lane in _work_lanes %}{% for item in brief.lanes[lane] %}{% set _ = work.append(item) %}{% endfor %}{% endfor %}
+      {% for p in [1, 2, 3] %}
+        {{ column('priority-' ~ p, _priority_labels[p], work | selectattr('priority', 'equalto', p) | list,
+                  'priority', '{ priority: ' ~ p ~ ' }',
+                  "{ lane: dueDate ? 'tasks_due' : 'action_items', title: title.trim(), priority: " ~ p ~ " }",
+                  false) }}
+      {% endfor %}
+      {% for lane in lanes_order if lane not in _work_lanes %}
+        {{ column(lane, lane_labels[lane], brief.lanes[lane], 'lane', "{ lane: '" ~ lane ~ "' }",
+                  "{ lane: '" ~ lane ~ "', title: title.trim() }", true) }}
+      {% endfor %}
+    {% else %}
+      {% for lane in lanes_order %}
+        {{ column(lane, lane_labels[lane], brief.lanes[lane], 'lane', "{ lane: '" ~ lane ~ "' }",
+                  "{ lane: '" ~ lane ~ "', title: title.trim() }", true) }}
+      {% endfor %}
+    {% endif %}
+  </div>
+</main>

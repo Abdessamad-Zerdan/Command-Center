@@ -1,0 +1,768 @@
+{% extends "base.html" %}
+{% block title %}Tasks Tracker{% endblock %}
+{% block extra_head %}
+{# Only this page's timer uses Fraunces (static/css/base.css) — fetch it early. #}
+<link rel="preload" href="/static/fonts/fraunces-latin.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+  /* A short rise only — the timer is usable from the first frame. */
+  @keyframes fadeUp {
+    from { transform: translateY(6px); }
+  }
+  .animate-in { animation: fadeUp 300ms ease-out both; }
+
+  /* The name settles into its resting letter-spacing (tracking-widest =
+     0.1em) — readable throughout, never faded out. */
+  .title-reveal { animation: titleReveal 700ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+  @keyframes titleReveal {
+    from { letter-spacing: 0.3em; }
+    to { letter-spacing: 0.1em; }
+  }
+
+  /* Sun arc: a dotted horizon over the timer. The sun rests at dawn
+     (left) breathing slowly while idle — a breathing pace, not a blink —
+     then travels the arc as the session runs, trailing a warm stroke.
+     During a break it turns sage and walks the same arc again. */
+  .sun-arc-track {
+    fill: none;
+    stroke: rgb(168 162 158 / 0.55);
+    stroke-width: 1.2;
+    stroke-dasharray: 0.006 0.018;
+    stroke-linecap: round;
+  }
+  .dark .sun-arc-track { stroke: rgb(120 113 108 / 0.6); }
+  .sun-arc-progress {
+    fill: none;
+    stroke: url(#sunArcDay);
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    transition: stroke-dasharray 1.2s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .sun-arc.is-break .sun-arc-progress { stroke: url(#sunArcBreak); }
+  .sun-orb { transition: transform 1.2s cubic-bezier(0.22, 1, 0.36, 1); }
+  .sun-orb-core { fill: #e58c4a; transition: fill 1s ease; }
+  .sun-orb-halo {
+    fill: #f0a463;
+    filter: blur(3px);
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: sunBreathe 8s ease-in-out infinite;
+    transition: fill 1s ease;
+  }
+  .sun-arc.is-running .sun-orb-halo { animation-duration: 4s; }
+  .sun-arc.is-break .sun-orb-core { fill: #6fae9a; }
+  .sun-arc.is-break .sun-orb-halo { fill: #8cc7b3; }
+  @keyframes sunBreathe {
+    0%, 100% { transform: scale(0.75); opacity: 0.25; }
+    50% { transform: scale(1.35); opacity: 0.55; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sun-orb-halo { animation: none; }
+    .title-reveal { animation: none; }
+    .sun-orb, .sun-arc-progress { transition: none; }
+  }
+</style>
+<script>
+  function pomodoroTimer(initialHistory, initialTimeByTask) {
+    return {
+      // --- identity of the current/next work session ---
+      taskName: '',
+      taskSourceId: null,
+      taskNameDraft: '',
+      promptingName: false,
+
+      // --- durations (work + break), quick-select plus free-form ---
+      plannedMinutes: 25,
+      customMinutesDraft: '',
+      breakMinutes: 5,
+
+      // --- phase: idle -> working -> ended (break prompt) -> break -> idle ---
+      phase: 'idle',
+
+      // --- live session bookkeeping ---
+      sessionId: null,
+      priorAccumulatedSeconds: 0,   // seconds banked from past run/pause periods of THIS session
+      currentPeriodStartMs: null,   // Date.now() the current running period began; null while paused
+      lastSessionWorkedSeconds: 0,  // for the "X logged" line in the break prompt
+      breakStartMs: null,
+      breakRemainingSeconds: 0,
+      // A task card's "Start Pomodoro" clicked while another session is
+      // timing — held here until the user chooses to switch.
+      pendingTask: null,
+      saveError: '',
+      intervalId: null,
+      ticksSinceHeartbeat: 0,
+      // Alpine's reactivity is proxy-based — it only re-renders a
+      // binding when a tracked *property* is set, and Date.now() called
+      // fresh inside a getter isn't one. _now is a plain reactive
+      // property, set once a second by tick()'s interval purely so
+      // workedSeconds (and anything computed from it) has something to
+      // depend on and re-evaluate every second — the actual elapsed-time
+      // math still comes from real timestamp subtraction, not a
+      // decremented counter, so it's still immune to setInterval drift.
+      _now: Date.now(),
+
+      history: initialHistory,
+      timeByTask: initialTimeByTask,
+
+      get running() { return this.phase === 'working' && this.currentPeriodStartMs !== null; },
+      get paused() { return this.phase === 'working' && this.currentPeriodStartMs === null; },
+
+      get workedSeconds() {
+        const live = this.currentPeriodStartMs
+          ? Math.floor((this._now - this.currentPeriodStartMs) / 1000)
+          : 0;
+        return this.priorAccumulatedSeconds + live;
+      },
+
+      get remainingSeconds() {
+        return Math.max(0, this.plannedMinutes * 60 - this.workedSeconds);
+      },
+
+      get display() {
+        return this._fmtClock(this.phase === 'break' ? this.breakRemainingSeconds : this.remainingSeconds);
+      },
+
+      // 0..1 — how far the sun has travelled along the arc above the
+      // timer: through the current work session, or through the break.
+      get progress() {
+        if (this.phase === 'working') return Math.min(1, this.workedSeconds / (this.plannedMinutes * 60));
+        if (this.phase === 'ended') return 1;
+        if (this.phase === 'break') {
+          const total = this.breakMinutes * 60;
+          return total ? Math.min(1, 1 - this.breakRemainingSeconds / total) : 0;
+        }
+        return 0;
+      },
+
+      placeSun(orb, p) {
+        const path = this.$refs.sunPath;
+        if (!path || !orb) return;
+        const pt = path.getPointAtLength(path.getTotalLength() * p);
+        orb.style.transform = `translate(${pt.x}px, ${pt.y}px)`;
+      },
+
+      _fmtClock(totalSeconds) {
+        const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+        const s = Math.floor(totalSeconds % 60).toString().padStart(2, '0');
+        return `${m}:${s}`;
+      },
+
+      init() {
+        this.restore();
+        // A task card's "Start Pomodoro" link only pre-fills — it never
+        // auto-starts. Between sessions (idle, the break prompt, a break)
+        // it becomes the next session's task; while one is timing it's
+        // held as pendingTask so it can't clobber the session in progress.
+        const params = new URLSearchParams(window.location.search);
+        const name = params.get('pomodoro_task_name');
+        if (name) {
+          const id = params.get('pomodoro_task_id');
+          const task = { name, id: id ? parseInt(id, 10) : null };
+          if (this.phase === 'working') {
+            if (task.name !== this.taskName || task.id !== this.taskSourceId) this.pendingTask = task;
+          } else {
+            this.taskName = task.name;
+            this.taskSourceId = task.id;
+            this.persist();
+          }
+        }
+        if (window.location.search.includes('pomodoro_task')) {
+          history.replaceState(null, '', window.location.pathname);
+        }
+      },
+
+      // Every phase is saved, not just a running session — leaving the
+      // page during the break prompt or a break used to drop the break
+      // and the task with it.
+      restore() {
+        const raw = localStorage.getItem('pomodoro');
+        if (!raw) return;
+        let saved;
+        try { saved = JSON.parse(raw); } catch (e) { return; }
+
+        this.taskName = saved.taskName || '';
+        this.taskSourceId = saved.taskSourceId ?? null;
+        this.plannedMinutes = saved.plannedMinutes || 25;
+        this.breakMinutes = saved.breakMinutes || 5;
+        const phase = saved.phase || (saved.sessionId ? 'working' : 'idle');
+
+        if (phase === 'ended' || phase === 'break') {
+          this.sessionId = saved.sessionId ?? null;
+          this.lastSessionWorkedSeconds = saved.lastSessionWorkedSeconds || 0;
+          this.phase = 'ended';
+          if (phase === 'break' && saved.breakStartMs) this.startBreak(saved.breakStartMs);
+          return;
+        }
+        if (phase !== 'working' || !saved.sessionId) return;  // idle: just the next task
+
+        this.sessionId = saved.sessionId;
+        this.priorAccumulatedSeconds = saved.priorAccumulatedSeconds || 0;
+        this.phase = 'working';
+
+        if (saved.currentPeriodStartMs) {
+          // Was actively running when last persisted (including at the
+          // moment the tab/browser closed) — resume counting from that
+          // same start point, so the gap while closed counts too.
+          this.currentPeriodStartMs = saved.currentPeriodStartMs;
+          if (this.workedSeconds >= this.plannedMinutes * 60) {
+            this.finishSession('completed');
+          } else {
+            this.tick();
+          }
+        } else {
+          this.currentPeriodStartMs = null;
+        }
+      },
+
+      persist() {
+        localStorage.setItem('pomodoro', JSON.stringify({
+          phase: this.phase,
+          sessionId: this.sessionId,
+          taskName: this.taskName,
+          taskSourceId: this.taskSourceId,
+          plannedMinutes: this.plannedMinutes,
+          breakMinutes: this.breakMinutes,
+          priorAccumulatedSeconds: this.priorAccumulatedSeconds,
+          currentPeriodStartMs: this.currentPeriodStartMs,
+          lastSessionWorkedSeconds: this.lastSessionWorkedSeconds,
+          breakStartMs: this.breakStartMs,
+        }));
+      },
+
+      // Idle only: forget the remembered task so Start asks for a new one.
+      clearTask() {
+        this.taskName = '';
+        this.taskSourceId = null;
+        this.persist();
+      },
+
+      // Stops the session that's timing (its time is still logged) and
+      // makes the card the user just picked the next task.
+      switchToPending() {
+        const task = this.pendingTask;
+        if (!task) return;
+        this.pendingTask = null;
+        this.finishSession('stopped_early');
+        this.taskName = task.name;
+        this.taskSourceId = task.id;
+        this.persist();
+      },
+
+      clickMain() {
+        if (this.running) { this.pause(); return; }
+        if (this.paused) { this.resume(); return; }
+        if (this.taskName.trim()) { this.start(); return; }
+        this.taskNameDraft = '';
+        this.promptingName = true;
+        this.$nextTick(() => this.$refs.taskInput && this.$refs.taskInput.focus());
+      },
+
+      confirmName() {
+        if (!this.taskNameDraft.trim()) return;
+        this.taskName = this.taskNameDraft.trim();
+        this.taskSourceId = null;  // a typed-in name is always anonymous, unlike a task-card-linked one
+        this.taskNameDraft = '';
+        this.promptingName = false;
+        this.start();
+      },
+
+      cancelPrompt() {
+        this.promptingName = false;
+        this.taskNameDraft = '';
+      },
+
+      applyCustomMinutes() {
+        const n = parseInt(this.customMinutesDraft, 10);
+        if (n > 0) this.plannedMinutes = n;
+        this.customMinutesDraft = '';
+      },
+
+      start() {
+        this.phase = 'working';
+        this.priorAccumulatedSeconds = 0;
+        this.currentPeriodStartMs = Date.now();
+        this.ticksSinceHeartbeat = 0;
+        fetch('/pomodoro/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task_name: this.taskName,
+            planned_minutes: this.plannedMinutes,
+            task_source_id: this.taskSourceId,
+          }),
+        })
+          .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+          .then(data => { this.sessionId = data.id; this.persist(); })
+          .catch(() => { this.saveError = "Couldn't save this session, so its time won't be logged. Reset and try again."; });
+        this.saveError = '';
+        this.persist();
+        this.tick();
+      },
+
+      tick() {
+        clearInterval(this.intervalId);
+        this.intervalId = setInterval(() => {
+          this._now = Date.now();
+          if (this.workedSeconds >= this.plannedMinutes * 60) {
+            this.finishSession('completed');
+            return;
+          }
+          this.ticksSinceHeartbeat++;
+          if (this.ticksSinceHeartbeat >= 5) {
+            this.ticksSinceHeartbeat = 0;
+            this.sendHeartbeat();
+          }
+          this.persist();
+        }, 1000);
+      },
+
+      sendHeartbeat(extra) {
+        if (!this.sessionId) return;
+        fetch(`/pomodoro/sessions/${this.sessionId}/heartbeat`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          keepalive: true,  // survives a tab close mid-request, unlike a plain fetch
+          body: JSON.stringify({ elapsed_seconds: this.workedSeconds, ...extra }),
+        });
+      },
+
+      pause() {
+        clearInterval(this.intervalId);
+        this.priorAccumulatedSeconds = this.workedSeconds;
+        this.currentPeriodStartMs = null;
+        this.sendHeartbeat({ paused: true });
+        this.persist();
+      },
+
+      resume() {
+        this.currentPeriodStartMs = Date.now();
+        this.ticksSinceHeartbeat = 0;
+        this.sendHeartbeat({ resumed: true });
+        this.persist();
+        this.tick();
+      },
+
+      // Explicit early stop — the "Reset" button. Distinct from
+      // finishSession('completed'), which is the timer running out on
+      // its own.
+      reset() {
+        this.finishSession('stopped_early');
+      },
+
+      finishSession(status) {
+        clearInterval(this.intervalId);
+        const worked = Math.min(this.workedSeconds, this.plannedMinutes * 60);
+        const taskName = this.taskName;
+        const taskSourceId = this.taskSourceId;
+        const sessionId = this.sessionId;
+
+        const applyLocally = () => {
+          this.history.unshift({
+            id: sessionId, task_name: taskName, planned_minutes: this.plannedMinutes,
+            elapsed_seconds: worked, status: status, task_source_id: taskSourceId,
+          });
+          const existing = this.timeByTask.find(t => t.task_name === taskName);
+          if (existing) {
+            existing.total_seconds += worked;
+            if (taskSourceId) existing.task_source_id = taskSourceId;
+          } else {
+            this.timeByTask.push({ task_name: taskName, total_seconds: worked, task_source_id: taskSourceId });
+          }
+          this.timeByTask.sort((a, b) => b.total_seconds - a.total_seconds);
+        };
+
+        if (sessionId) {
+          fetch(`/pomodoro/sessions/${sessionId}/finish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            keepalive: true,
+            body: JSON.stringify({ elapsed_seconds: worked, status: status }),
+          }).then(() => applyLocally());
+        }
+
+        this.currentPeriodStartMs = null;
+        this.priorAccumulatedSeconds = 0;
+        this.lastSessionWorkedSeconds = worked;
+
+        if (status === 'completed') {
+          this.phase = 'ended';  // take-a-break prompt — timer UI is NOT reset to a fresh countdown
+        } else {
+          // The task stays: Reset usually means "start this one over",
+          // and "Change task" is one click away if it doesn't.
+          this.phase = 'idle';
+          this.sessionId = null;
+        }
+        this.persist();
+      },
+
+      // startedAtMs is given when restoring a break that began before a
+      // page change — it keeps counting from then, and ends at once if it
+      // ran out while the page was closed.
+      startBreak(startedAtMs) {
+        this.phase = 'break';
+        this.breakStartMs = startedAtMs || Date.now();
+        const update = () => {
+          const elapsed = Math.floor((Date.now() - this.breakStartMs) / 1000);
+          this.breakRemainingSeconds = Math.max(0, this.breakMinutes * 60 - elapsed);
+          if (this.breakRemainingSeconds <= 0) this.endBreak();
+        };
+        clearInterval(this.intervalId);
+        update();
+        if (this.phase !== 'break') return;
+        this.persist();
+        this.intervalId = setInterval(update, 1000);
+      },
+
+      endBreak() {
+        clearInterval(this.intervalId);
+        const breakSeconds = this.breakStartMs
+          ? Math.min(this.breakMinutes * 60, Math.floor((Date.now() - this.breakStartMs) / 1000))
+          : 0;
+        const sessionId = this.sessionId;
+        if (sessionId) {
+          fetch(`/pomodoro/sessions/${sessionId}/finish`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              elapsed_seconds: this.lastSessionWorkedSeconds,
+              status: 'completed',
+              break_duration_sec: breakSeconds,
+            }),
+          });
+        }
+        this.backToIdle();
+      },
+
+      // After a break (or skipping it) the task stays loaded, so one
+      // click on Start carries on with it — no trip back to the brief.
+      backToIdle() {
+        this.phase = 'idle';
+        this.sessionId = null;
+        this.breakStartMs = null;
+        this.persist();
+      },
+
+      // beforeunload: a plain fetch can get cancelled mid-flight when the
+      // page unloads. keepalive:true (used on every heartbeat/finish
+      // call above already) is what actually makes the browser-close
+      // case reliable — this handler's job is just to force one last
+      // save right at the moment of closing, not to wait for the next
+      // scheduled 5s tick.
+      handleUnload() {
+        if (this.running) this.sendHeartbeat();
+      },
+
+      deleteSession(id) {
+        fetch(`/pomodoro/sessions/${id}`, { method: 'DELETE' })
+          .then(r => r.json())
+          .then(deleted => {
+            this.history = this.history.filter(s => s.id !== id);
+            const t = this.timeByTask.find(t => t.task_name === deleted.task_name);
+            if (t) {
+              t.total_seconds -= deleted.elapsed_seconds;
+              if (t.total_seconds <= 0) {
+                this.timeByTask = this.timeByTask.filter(x => x.task_name !== deleted.task_name);
+              }
+            }
+          });
+      },
+
+      // Removes every session logged under this name — the whole row in
+      // Time by task, and its entries in History. The task itself (if it
+      // came from a card) is untouched.
+      deleteTask(taskName) {
+        if (!confirm(`Delete all logged time for "${taskName}"?`)) return;
+        fetch(`/pomodoro/tasks?name=${encodeURIComponent(taskName)}`, { method: 'DELETE' })
+          .then(r => {
+            if (!r.ok && r.status !== 404) return;
+            this.timeByTask = this.timeByTask.filter(t => t.task_name !== taskName);
+            this.history = this.history.filter(s => s.task_name !== taskName);
+          });
+      },
+
+      // Sessions started from a task card remember it, so their name
+      // leads back to the task in its original place.
+      taskUrl(sourceId) {
+        return sourceId ? `/items/${sourceId}/open` : null;
+      },
+
+      renameTask(oldName, newName) {
+        newName = newName.trim();
+        if (!newName || newName === oldName) return;
+        fetch('/pomodoro/tasks', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ old_name: oldName, new_name: newName }),
+        }).then(r => r.json()).then(() => {
+          const t = this.timeByTask.find(t => t.task_name === oldName);
+          if (t) t.task_name = newName;
+          this.history.forEach(s => { if (s.task_name === oldName) s.task_name = newName; });
+          if (this.taskName === oldName) this.taskName = newName;
+        });
+      },
+
+      formatDuration(totalSeconds) {
+        const mins = Math.round(totalSeconds / 60);
+        if (mins < 60) return `${mins}m`;
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return m ? `${h}h ${m}m` : `${h}h`;
+      },
+    };
+  }
+</script>
+{% endblock %}
+{% block content %}
+
+<a href="/brief" class="fixed top-4 left-4 sm:top-6 sm:left-6 z-20 text-sm text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100 bg-[#faf6f1]/90 dark:bg-stone-900/90 backdrop-blur-sm px-2 py-1 rounded">
+  &#8592; Today's Brief
+</a>
+
+<div class="min-h-screen">
+
+  <section class="min-h-screen flex flex-col items-center justify-center px-6 py-16 text-center">
+    <div class="title-reveal text-xs uppercase tracking-widest text-stone-400 dark:text-stone-500">
+      Tasks Tracker
+    </div>
+
+    <div
+      class="animate-in mt-8 w-full max-w-sm"
+      style="animation-delay: 40ms;"
+      x-data='pomodoroTimer({{ pomodoro_history | tojson }}, {{ time_by_task | tojson }})'
+      @beforeunload.window="handleUnload()"
+    >
+      <div
+        class="sun-arc mx-auto -mb-1 w-full"
+        :class="{ 'is-break': phase === 'break', 'is-running': running }"
+        aria-hidden="true"
+      >
+        <svg viewBox="0 0 320 64" class="w-full h-auto overflow-visible">
+          <defs>
+            <linearGradient id="sunArcDay" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" style="stop-color: var(--aura-3); stop-opacity: 0.3"/>
+              <stop offset="1" style="stop-color: #d97757"/>
+            </linearGradient>
+            <linearGradient id="sunArcBreak" x1="0" x2="1" y1="0" y2="0">
+              <stop offset="0" style="stop-color: #b8dccd; stop-opacity: 0.3"/>
+              <stop offset="1" style="stop-color: #6fae9a"/>
+            </linearGradient>
+          </defs>
+          <path x-ref="sunPath" class="sun-arc-track" d="M 12 56 Q 160 -8 308 56" pathLength="1"/>
+          <path class="sun-arc-progress" d="M 12 56 Q 160 -8 308 56" pathLength="1" :style="`stroke-dasharray: ${progress} 1`"/>
+          <g class="sun-orb" style="transform: translate(12px, 56px)" x-effect="placeSun($el, progress)">
+            <circle class="sun-orb-halo" r="11"/>
+            <circle class="sun-orb-core" r="4.5"/>
+          </g>
+        </svg>
+      </div>
+
+      <div class="h-5 flex items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400" x-show="taskName">
+        <span x-text="taskName"></span>
+        <button
+          type="button"
+          @click="clearTask()"
+          x-show="phase === 'idle' && !promptingName"
+          class="text-xs underline text-stone-400 dark:text-stone-500 hover:text-stone-900 dark:hover:text-stone-100"
+        >Change task</button>
+      </div>
+
+      <div x-show="pendingTask" class="mt-2 text-xs text-stone-600 dark:text-stone-300">
+        Still timing this one. Switch to
+        &ldquo;<span x-text="pendingTask && pendingTask.name"></span>&rdquo;?
+        <button type="button" @click="switchToPending()" class="underline text-rust dark:text-rust-light">Stop &amp; switch</button>
+        <button type="button" @click="pendingTask = null" class="underline text-stone-400 dark:text-stone-500">Keep going</button>
+      </div>
+
+      <p x-show="saveError" x-text="saveError" class="mt-2 text-xs text-red-600 dark:text-red-400"></p>
+
+      <div
+        class="mt-1 font-['Fraunces'] text-7xl sm:text-9xl tabular-nums text-stone-900 dark:text-stone-100"
+        :class="phase === 'working' ? 'timer-alive' : ''"
+        x-text="display"
+      ></div>
+
+      <div class="mt-2 flex items-center justify-center gap-1.5 flex-wrap" x-show="phase === 'idle' && !promptingName">
+        <template x-for="m in [25, 15, 5]" :key="m">
+          <button
+            type="button"
+            @click="plannedMinutes = m"
+            :class="plannedMinutes === m ? 'text-rust dark:text-rust-light' : 'text-stone-400 dark:text-stone-500'"
+            class="text-xs px-2 py-0.5 hover:text-stone-900 dark:hover:text-stone-100"
+            x-text="m + 'm'"
+          ></button>
+        </template>
+        <input
+          type="number"
+          min="1"
+          x-model="customMinutesDraft"
+          @keydown.enter="applyCustomMinutes()"
+          @blur="applyCustomMinutes()"
+          placeholder="custom"
+          class="w-16 text-xs text-center bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1.5 py-0.5 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+        >
+      </div>
+
+      <div class="mt-6" x-show="(phase === 'idle' || phase === 'working') && !promptingName">
+        <div class="flex items-center justify-center gap-2">
+          <button
+            type="button"
+            @click="clickMain()"
+            class="card-lift text-xs px-4 py-2 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium whitespace-nowrap"
+          >
+            <span x-text="running ? 'Pause' : (paused ? 'Resume' : 'Start')"></span>
+          </button>
+          <button
+            type="button"
+            @click="reset()"
+            x-show="running || paused"
+            class="text-xs px-4 py-2 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100"
+          >Reset</button>
+        </div>
+      </div>
+
+      <div class="mt-6" x-show="promptingName" x-transition.opacity>
+        <input
+          type="text"
+          x-model="taskNameDraft"
+          x-ref="taskInput"
+          @keydown.enter="confirmName()"
+          @keydown.escape="cancelPrompt()"
+          placeholder="What are you working on?"
+          class="w-full text-center text-sm bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-3 py-2 text-stone-900 dark:text-stone-100 placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+        >
+        <div class="mt-2 flex items-center justify-center gap-2">
+          <button
+            type="button"
+            @click="confirmName()"
+            class="text-xs px-4 py-2 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium"
+          >Start</button>
+          <button
+            type="button"
+            @click="cancelPrompt()"
+            class="text-xs px-4 py-2 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100"
+          >Cancel</button>
+        </div>
+      </div>
+
+      <div class="mt-6" x-show="phase === 'ended'" x-transition.opacity>
+        <p class="text-sm text-stone-600 dark:text-stone-300">
+          <span x-text="formatDuration(lastSessionWorkedSeconds)"></span> logged. Take a break?
+        </p>
+        <div class="mt-2 flex items-center justify-center gap-1.5">
+          <input
+            type="number"
+            min="1"
+            x-model.number="breakMinutes"
+            class="w-14 text-xs text-center bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1.5 py-0.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+          >
+          <span class="text-xs text-stone-400 dark:text-stone-500">min suggested</span>
+        </div>
+        <div class="mt-3 flex items-center justify-center gap-2">
+          <button
+            type="button"
+            @click="startBreak()"
+            class="text-xs px-4 py-2 rounded bg-rust hover:bg-[#9c4830] dark:bg-rust-light dark:hover:bg-[#e08761] text-white font-medium"
+          >Start break</button>
+          <button
+            type="button"
+            @click="endBreak()"
+            class="text-xs px-4 py-2 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100"
+          >Skip break</button>
+        </div>
+      </div>
+
+      <div class="mt-6" x-show="phase === 'break'" x-transition.opacity>
+        <p class="text-sm text-stone-600 dark:text-stone-300">On break. <span x-show="taskName">Next up: <span x-text="taskName"></span></span></p>
+        <div class="mt-3">
+          <button
+            type="button"
+            @click="endBreak()"
+            class="text-xs px-4 py-2 rounded border border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400 hover:text-stone-900 dark:hover:text-stone-100"
+          >End break</button>
+        </div>
+      </div>
+
+      <template x-if="history.length">
+        <div class="mt-10 text-left">
+          <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-1.5">Time by task</div>
+          <div class="space-y-1 mb-4">
+            <template x-for="t in timeByTask.slice(0, 5)" :key="t.task_name">
+              <div class="flex justify-between items-center text-xs text-stone-600 dark:text-stone-300" x-data="{ editing: false, draft: t.task_name }">
+                <template x-if="!editing">
+                  <span class="flex items-center gap-1.5 min-w-0">
+                    <template x-if="taskUrl(t.task_source_id)">
+                      <a :href="taskUrl(t.task_source_id)" x-text="t.task_name" title="Open this task" class="truncate hover:text-rust dark:hover:text-rust-light hover:underline underline-offset-2"></a>
+                    </template>
+                    <template x-if="!taskUrl(t.task_source_id)">
+                      <span x-text="t.task_name" class="truncate"></span>
+                    </template>
+                    <button
+                      type="button"
+                      @click="editing = true; draft = t.task_name"
+                      class="shrink-0 text-stone-300 dark:text-stone-600 hover:text-rust dark:hover:text-rust-light"
+                      aria-label="Rename task"
+                      title="Rename"
+                    >&#9998;</button>
+                    <button
+                      type="button"
+                      @click="deleteTask(t.task_name)"
+                      class="shrink-0 text-stone-300 dark:text-stone-600 hover:text-red-600 dark:hover:text-red-400"
+                      aria-label="Delete task's logged time"
+                      title="Delete"
+                    >&times;</button>
+                  </span>
+                </template>
+                <template x-if="editing">
+                  <input
+                    type="text"
+                    x-model="draft"
+                    x-init="$watch('editing', value => { if (value) $nextTick(() => $el.focus()) })"
+                    @keydown.enter="renameTask(t.task_name, draft); editing = false"
+                    @keydown.escape="editing = false"
+                    @blur="editing = false"
+                    class="min-w-0 flex-1 text-xs bg-white dark:bg-stone-800 border border-stone-300 dark:border-stone-600 rounded px-1 py-0.5 text-stone-900 dark:text-stone-100 focus:outline-none focus:border-rust dark:focus:border-rust-light"
+                  >
+                </template>
+                <span x-text="formatDuration(t.total_seconds)" class="shrink-0 ml-2 text-stone-400 dark:text-stone-500"></span>
+              </div>
+            </template>
+          </div>
+
+          <div class="text-[11px] uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-1.5">History</div>
+          <div class="space-y-1 max-h-40 overflow-y-auto">
+            <template x-for="s in history.slice(0, 10)" :key="s.id">
+              <div class="flex justify-between items-center text-xs text-stone-600 dark:text-stone-300 py-0.5">
+                <template x-if="taskUrl(s.task_source_id)">
+                  <a :href="taskUrl(s.task_source_id)" x-text="s.task_name" title="Open this task" class="truncate hover:text-rust dark:hover:text-rust-light hover:underline underline-offset-2"></a>
+                </template>
+                <template x-if="!taskUrl(s.task_source_id)">
+                  <span x-text="s.task_name" class="truncate"></span>
+                </template>
+                <span class="flex items-center gap-1.5 shrink-0 ml-2">
+                  <span
+                    :class="s.status === 'stopped_early' ? 'text-stone-400 dark:text-stone-500 italic' : 'text-stone-400 dark:text-stone-500'"
+                    x-text="formatDuration(s.elapsed_seconds)"
+                  ></span>
+                  <button
+                    type="button"
+                    @click="deleteSession(s.id)"
+                    class="text-stone-300 dark:text-stone-600 hover:text-rust dark:hover:text-rust-light"
+                    aria-label="Delete session"
+                  >&times;</button>
+                </span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <a href="/brief" class="card-lift animate-in mt-10 block w-full max-w-sm rounded-lg border border-stone-200 dark:border-stone-700 bg-white/60 dark:bg-stone-800/40 backdrop-blur-sm hover:border-rust dark:hover:border-rust-light p-4 text-left" style="animation-delay: .15s;">
+      <div class="text-xs uppercase tracking-wide text-stone-500 dark:text-stone-400">Today's brief &middot; {{ brief_date_short }}</div>
+      <div class="mt-1 text-sm text-stone-700 dark:text-stone-300">{{ tasks_count }} tasks &middot; {{ due_today_count }} due today</div>
+    </a>
+  </section>
+
+</div>
+{% endblock %}
