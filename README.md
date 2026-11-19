@@ -101,7 +101,6 @@ the only things that leave it, and only when the feature is in use:
 | **Ollama** (`TRIAGE_PROVIDER=ollama`, or `auto` while the local model is available) | Same as the Groq/Anthropic triage row — but to a model running **on your own machine**; nothing leaves it | Every pull |
 | **RapidAPI / Medium** | Your Medium username | When the Medium source pulls (only if `MEDIUM_API_KEY` is set) |
 | **ntfy** (`NTFY_SERVER`, default the public ntfy.sh) | Nudge texts, e.g. "3 urgent items untouched since yesterday" — readable by anyone who knows your topic name | Only if `NTFY_TOPIC` is set |
-| **CDNs** (Tailwind, jsDelivr for Alpine, Google Fonts) | Ordinary page-asset requests from your browser — no app data | Every page load |
 | **Hugging Face** | A one-time download of the local embedding model; your documents are embedded locally | First assistant use |
 
 To keep triage fully local, use `TRIAGE_PROVIDER=ollama`. The assistant,
